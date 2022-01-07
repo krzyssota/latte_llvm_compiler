@@ -47,7 +47,7 @@ instance Show StaticError where
     show (TypesMismatch t1 t2 p) = "Expected type " ++ myShow t1 ++ ", got " ++ myShow t2 ++ inLine p
     show (WrongFnRetType (Ident i) t1 t2 p) = "Function " ++ i ++ " expects a return of type " ++ myShow t1 ++ " got " ++ myShow t2 ++ inLine p
     show (WrongArgType (Ident i) (Arg p1 t1 (Ident a)) t2 p2) = "Function " ++ i ++ " expects an argument " ++ a ++ " of type " ++ myShow t1 ++ " but received " ++ myShow t2 ++ inLine p2
-    show (WrongArgNumber (Ident i) i1 i2 p) = "Function " ++ i ++ " expects " ++ show i1 ++ " arguments " ++ " but received " ++ show i2
+    show (WrongArgNumber (Ident i) i1 i2 p) = "Function " ++ i ++ " expects " ++ show i1 ++ " arguments " ++ " but received " ++ show i2 ++ inLine p
     show (InvalidOperation p) = "Invalid operation " ++ inLine p
     show (WrongMainArgNumber i p) = "Main function has to have 0 arguments, not " ++ show i ++ inLine p
     show (WrongMainRetType t p) = "Main function has to have int type, not " ++ myShow t ++ inLine p
