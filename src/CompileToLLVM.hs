@@ -22,25 +22,26 @@ import Data.Set as S (Set, insert, member, empty)
 import Control.Exception (throw)
 import Data.Maybe
 import System.Exit (exitFailure)
-import GHC.Exts.Heap (GenClosure(fun))
 
-type Loc = Integer
-type Env = M.Map Ident Loc
-initialEnv :: M.Map k a
+type VarsEnv = M.Map Ident (LLVM.Type, Loc)
 initialEnv = M.empty
 type FnEnv = M.Map String LLVM.Type
 data CompilerState = CompilerState {
-    counter :: Counter,
+    registerCounter :: Counter,
+    globalsCounter :: Counter,
+    globInstructions :: [Instruction],
     instructions :: [Instruction],
     functions :: FnEnv
 }
 initialCompilerState :: CompilerState
 initialCompilerState = CompilerState {
-    counter = newCounter,
+    registerCounter = newCounter,
+    globalsCounter = newCounter,
+    globInstructions = [],
     instructions = [],
     functions = M.empty
 }
-type CompilerM = ReaderT Env (ExceptT MyError (StateT CompilerState IO))
+type CompilerM = ReaderT VarsEnv (ExceptT MyError (StateT CompilerState IO))
 
 newtype Counter = Counter Integer
 instance Show Counter where
@@ -51,11 +52,17 @@ incCounter :: Counter -> Counter
 incCounter (Counter i) = Counter $ i+1
 castCounter :: Counter -> Integer
 castCounter (Counter i) = i
-freshInteger :: CompilerM Integer
-freshInteger = do
+newRegister :: CompilerM Integer
+newRegister = do
     cs <- get
-    let old = castCounter (counter cs) in do
-        modify (\s -> s {counter = incCounter $ counter cs})
+    let old = castCounter (registerCounter cs) in do
+        modify (\s -> s {registerCounter = incCounter $ registerCounter cs})
+        return old
+newGlobal :: CompilerM Integer
+newGlobal = do
+    cs <- get
+    let old = castCounter (globalsCounter cs) in do
+        modify (\s -> s {globalsCounter = incCounter $ globalsCounter cs})
         return old
 
 addInstruction :: Instruction -> CompilerM ()
@@ -63,14 +70,19 @@ addInstruction ins = do
     cs <- get
     modify (\s -> s {instructions = ins:instructions cs})
 
+addGlobalInstruction :: Instruction -> CompilerM ()
+addGlobalInstruction ins = do
+    cs <- get
+    modify (\s -> s {globInstructions = ins:globInstructions cs})
+
 registerFn :: TopDef -> CompilerM ()
 registerFn (FnDef p1 t (Ident ident) args _) = do
     cs <- get
     modify (\s -> s {functions = M.insert ident (LLVM.llvmType t) (functions cs)})
-    
+
 getFnType :: String -> CompilerM LLVM.Type
 getFnType ident = do
-    cs <- get 
+    cs <- get
     let funs = functions cs in
         case M.lookup ident funs of
             Just t -> return t
@@ -96,9 +108,10 @@ compile tree = do
       Left e -> do
           hPutStrLn stderr $ show e
           exitFailure
-      Right _ -> putStrLn ( prologue
+      Right _ -> putStrLn (
+                    intercalate "\n" (map show (globInstructions state))
+                    ++ "\n" ++ prologue
                     ++ intercalate "\n" (reverse $ map show (instructions state))
-                    {-++  "call void @printInt(i32 " ++ showCounter (counter hmm) ++ ")\n" -}
                     ++ epilogue)
 
 
@@ -110,48 +123,86 @@ compile' (Program _ topDefs) = do
 
 registerBuiltInFn :: (String, LLVM.Type) -> CompilerM ()
 registerBuiltInFn (ident, t) = do
-    cs <- get 
+    cs <- get
     modify (\s -> s {functions = M.insert ident t (functions cs)})
 
 
 
 compileTopDef :: TopDef -> CompilerM ()
-compileTopDef (FnDef p1 t ident args block) = do
+compileTopDef (FnDef p1 t ident args (Block p2 stmts)) = do
     --throwError $ Test "halko"
-    when (ident == Ident "main") (compileBlock block)
-
-compileBlock :: Block -> CompilerM ()
-compileBlock (Block p1 stmts) = do
-    compileStmts stmts
-    return ()
+    when (ident == Ident "main") (compileStmts stmts)
 
 compileStmts :: [Stmt] -> CompilerM ()
 compileStmts [] = return ()
 compileStmts (s:stmts) = do
-    compileStmt s
-    compileStmts stmts
+    env <- compileStmt s
+    local (const env) $ compileStmts stmts
 
-compileStmt :: Stmt -> CompilerM ()
-compileStmt (Empty p) = return ()
+compileStmt :: Stmt -> CompilerM VarsEnv
+compileStmt (Empty p) = ask
 compileStmt (SExp p expr) = do
         (_, _) <- compileExpr expr
-        return ()
+        ask
 compileStmt (AbsLatte.Ret p expr) = do
     (t, v) <- compileExpr expr
     case v of
         Nothing -> throwError $ FrontBug "bad ret"
-        Just val -> addInstruction (LLVM.Ret t val)
+        Just val -> do
+            addInstruction (LLVM.Ret t val)
+            ask
+compileStmt (AbsLatte.VRet p) = do
+    addInstruction LLVM.VoidRet
+    ask
+compileStmt (Decl p t (it:items)) = do
+    env <- declareVar t it
+    local (const env) $ compileStmt (Decl p t items) 
+compileStmt (Decl p t []) = ask
 
 compileStmt _ = throwError $ NotImplemented "compileStmt"
 
 compileExpr :: Expr -> CompilerM (LLVM.Type, Maybe Value)
-compileExpr (ELitInt p n) = do
-        return (I32, Just (Const n))
+compileExpr (ELitInt p i) = do
+        return (I32, Just (VConst (ConstI i)))
 compileExpr (EApp p ident exprs) = do
         args_ <- mapM compileExpr exprs
         args <- mapM unJustify args_
         call ident args
+compileExpr (ELitTrue p) = do
+    return (I1, Just (VConst ConstT))
+compileExpr (ELitFalse p) = do
+    return (I1, Just (VConst ConstF))
+compileExpr (EVar p ident) = do
+    n <- newRegister
+    env <- ask
+    case M.lookup ident env of
+        Just (t, ptr) -> do
+            addInstruction (Load (Register n) t ptr)
+            return (t, Just $ VRegister (Register n))
+        Nothing -> throwError $ FrontBug "undefined var"
+compileExpr (EString p s) = do
+    n <- newGlobal
+    addGlobalInstruction $ DeclareGString n s (length s + 1)
+    return (LLVM.Ptr I8, Just $ GetElemPtr n (length s + 1))
+
 compileExpr _ = throwError $ NotImplemented "compileExpr"
+
+declareVar :: AbsLatte.Type -> Item -> CompilerM VarsEnv
+declareVar t item = do
+    n <- newRegister
+    addInstruction (LLVM.Alloc (Register n) (llvmType t))
+    case item of
+        Init p ident expr -> do
+            (t2, v) <- compileExpr expr
+            when (llvmType t /= t2) (throwError $ FrontBug "decl mismatched types")
+            case v of
+                Just v -> do
+                    addInstruction (LLVM.Store v t2 n)
+                    asks (M.insert ident (llvmType t, n))
+                Nothing -> throwError $ FrontBug "void item in decl"
+
+        NoInit p ident -> do
+            asks (M.insert ident (llvmType t, n))
 
 unJustify :: (LLVM.Type, Maybe Value) -> CompilerM(LLVM.Type, Value)
 unJustify (t, Just v) = return (t, v)
@@ -165,10 +216,9 @@ call (Ident ident) args = do
             addInstruction (Call t ident args Nothing)
             return (t, Nothing)
         _ -> do
-            n <- freshInteger
+            n <- newRegister
             addInstruction (Call t ident args (Just $ Register n))
-            return (t, Just $ VRegister (Register n)) -- todo return register in which fn res is stored (Maybe Register has to be added to Call instr)
-    -- now we can only call functions for sideeffects
+            return (t, Just $ VRegister (Register n))
 
 
 indentLns :: [String] -> String
@@ -190,6 +240,7 @@ prologue =  indentLns [
     "declare i32 @readInt()",
     "declare i8* @readString()",
     "declare void @error()",
+    "",
     "define i32 @main(i32 %argc, i8** %argv) {"]
 
 epilogue = indentLns [
