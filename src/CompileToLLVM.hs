@@ -32,7 +32,7 @@ data CompilerState = CompilerState {
     globInstructions :: [Instruction],
     instructions :: [Instruction],
     functions :: FnEnv
-}
+} deriving (Show)
 initialCompilerState :: CompilerState
 initialCompilerState = CompilerState {
     registerCounter = newCounter,
@@ -90,11 +90,11 @@ getFnType ident = do
 
 
 type MyError = MyError' BNFC'Position
-data MyError' a = NotImplemented String | FrontBug String
+data MyError' a = NotImplemented String | FrontBug String | Debug String
 instance Show MyError where
     show (NotImplemented s) = "NotImplemented " ++ s
     show (FrontBug s) = "FrontBug " ++ s
-
+    show (Debug s) = "Debug " ++ s
 internalPos :: BNFC'Position
 internalPos = Just(-42, -42)
 
@@ -106,6 +106,11 @@ compile tree = do
     (err, state) <- runCompilerM (compile' tree)
     case err of
       Left e -> do
+          putStrLn ( "managed to compile before error\n" ++
+                    intercalate "\n" (map show (globInstructions state))
+                    ++ "\n" ++ prologue
+                    ++ intercalate "\n" (reverse $ map show (instructions state))
+                    ++ epilogue)
           hPutStrLn stderr $ show e
           exitFailure
       Right _ -> putStrLn (
@@ -127,17 +132,19 @@ registerBuiltInFn (ident, t) = do
     modify (\s -> s {functions = M.insert ident t (functions cs)})
 
 
-
-compileTopDef :: TopDef -> CompilerM ()
+compileTopDef :: TopDef -> CompilerM VarsEnv
 compileTopDef (FnDef p1 t ident args (Block p2 stmts)) = do
     --throwError $ Test "halko"
-    when (ident == Ident "main") (compileStmts stmts)
+    case ident of
+        Ident "main" -> compileStmts stmts
+        _ -> ask
 
-compileStmts :: [Stmt] -> CompilerM ()
-compileStmts [] = return ()
+
+compileStmts :: [Stmt] -> CompilerM VarsEnv
+compileStmts [] = ask
 compileStmts (s:stmts) = do
     env <- compileStmt s
-    local (const env) $ compileStmts stmts
+    local (const env) (compileStmts stmts)
 
 compileStmt :: Stmt -> CompilerM VarsEnv
 compileStmt (Empty p) = ask
@@ -156,10 +163,45 @@ compileStmt (AbsLatte.VRet p) = do
     ask
 compileStmt (Decl p t (it:items)) = do
     env <- declareVar t it
-    local (const env) $ compileStmt (Decl p t items) 
+    --throwError $ Debug (show env)
+    local (const env) $ compileStmt (Decl p t items)
+    --env2 <- ask
+    --throwError $ Debug (show env2) -- TODO usunac
 compileStmt (Decl p t []) = ask
-
+compileStmt (BStmt p1 (Block p2 stmts)) = do
+    env <- ask
+    local (const env) (compileStmts stmts)
+    return env
+compileStmt (Ass p1 ident expr) = do
+    (t, v) <- compileExpr expr
+    env <- ask
+    case (M.lookup ident env, v) of
+        (Just (declT, loc), Just val) -> do
+            when (t /= declT) (throwError $ FrontBug "ass with wrong type")
+            addInstruction (LLVM.Store val t loc)
+            return env
+        (Nothing, _) -> throwError $ FrontBug "ass to not undeclared var"
+            --printDebug
+            --ask -- TODO usunac
+        (_, Nothing) -> throwError $ FrontBug "assigning void expr to var"
 compileStmt _ = throwError $ NotImplemented "compileStmt"
+
+declareVar :: AbsLatte.Type -> Item -> CompilerM VarsEnv
+declareVar t item = do
+    n <- newRegister
+    addInstruction (LLVM.Alloc (Register n) (llvmType t))
+    case item of
+        Init p ident expr -> do
+            (t2, v) <- compileExpr expr
+            when (llvmType t /= t2) (throwError $ FrontBug "decl mismatched types")
+            case v of
+                Just v -> do
+                    addInstruction (LLVM.Store v t2 n)
+                    asks (M.insert ident (llvmType t, n))
+                Nothing -> throwError $ FrontBug "void item in decl"
+
+        NoInit p ident -> do
+            asks (M.insert ident (llvmType t, n))
 
 compileExpr :: Expr -> CompilerM (LLVM.Type, Maybe Value)
 compileExpr (ELitInt p i) = do
@@ -186,23 +228,6 @@ compileExpr (EString p s) = do
     return (LLVM.Ptr I8, Just $ GetElemPtr n (length s + 1))
 
 compileExpr _ = throwError $ NotImplemented "compileExpr"
-
-declareVar :: AbsLatte.Type -> Item -> CompilerM VarsEnv
-declareVar t item = do
-    n <- newRegister
-    addInstruction (LLVM.Alloc (Register n) (llvmType t))
-    case item of
-        Init p ident expr -> do
-            (t2, v) <- compileExpr expr
-            when (llvmType t /= t2) (throwError $ FrontBug "decl mismatched types")
-            case v of
-                Just v -> do
-                    addInstruction (LLVM.Store v t2 n)
-                    asks (M.insert ident (llvmType t, n))
-                Nothing -> throwError $ FrontBug "void item in decl"
-
-        NoInit p ident -> do
-            asks (M.insert ident (llvmType t, n))
 
 unJustify :: (LLVM.Type, Maybe Value) -> CompilerM(LLVM.Type, Value)
 unJustify (t, Just v) = return (t, v)
@@ -232,8 +257,6 @@ indentLn line =
   else
     "\t" ++ line ++ "\n"
 
-
-
 prologue =  indentLns [
     "declare void @printInt(i32)",
     "declare void @printString(i8*)",
@@ -248,7 +271,11 @@ epilogue = indentLns [
 
 builtInFuns = [("printInt", LLVM.Void), ("printString", LLVM.Void), ("readInt", I32),("readString", Ptr I8),("error", LLVM.Void)]
 
-
+printDebug :: CompilerM ()
+printDebug = do
+    env <- ask
+    state <- get
+    throwError $ Debug (show env ++ show state)
 {-
 builtinsCode = "%struct.__sFILE = type { i8*, i32, i32, i16, i16, %struct.__sbuf, i32, i8*, i32 (i8*)*, i32 (i8*, i8*, i32)*, i64 (i8*, i64, i32)*, i32 (i8*, i8*, i32)*, %struct.__sbuf, %struct.__sFILEX*, i32, [3 x i8], [1 x i8], %struct.__sbuf, i32, i64 }\n\
 \%struct.__sFILEX = type opaque\n\
