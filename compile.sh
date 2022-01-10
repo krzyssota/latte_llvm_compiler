@@ -1,3 +1,3 @@
-./src/latc lattests/mine/$1.lat > lattests/mine/$1.ll
+./src/latc $1.lat > $1.ll
 echo ""
-cat lattests/mine/$1.ll
+cat $1.ll

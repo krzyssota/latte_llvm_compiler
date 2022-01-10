@@ -25,7 +25,7 @@ lib:
 	llvm-as -o lib/runtime.bc lib/runtime.ll
 
 RunStaticAnalysis: $(SRC)/RunStaticAnalysis.hs $(SRC)/StaticAnalysis.hs $(SRC)/AbsLatte.hs $(SRC)/LexLatte.hs $(SRC)/ParLatte.hs $(SRC)/PrintLatte.hs
-	cd $(SRC) && ${GHC} ${GHC_OPTS} $@ && mv RunStaticAnalysis latc
+	cd $(SRC) && ${GHC} ${GHC_OPTS} $@ && mv RunStaticAnalysis latc_llvm
 
 clean :
 	-rm -f *.hi *.o *.log *.aux *.dvi

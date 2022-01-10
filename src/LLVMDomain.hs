@@ -25,18 +25,29 @@ llvmType _ = Undef
 llvmArg :: AbsLatte.Arg -> (Type, AbsLatte.Ident)
 llvmArg (AbsLatte.Arg _ t ident) = (llvmType t, ident)
 
+llvmAddOp :: AbsLatte.AddOp -> AriOp
+llvmAddOp addOp = case addOp of
+                    AbsLatte.Plus _ -> Add
+                    AbsLatte.Minus _ -> Sub
+llvmMulOp :: AbsLatte.MulOp -> AriOp
+llvmMulOp mulOp = case mulOp of
+                    AbsLatte.Times _ -> Mul
+                    AbsLatte.Div _ -> Sdiv
+                    AbsLatte.Mod _ -> Srem
+
 data Register = Register Integer
     deriving (Eq, Ord)
 instance Show Register where
     show (Register i) = "%r_" ++ show i
 
-data AriOp = Add | Sub | Mul | Sdiv
+data AriOp = Add | Sub | Mul | Sdiv | Srem
     deriving (Eq)
 instance Show AriOp where
     show Add = "add nsw i32"
     show Sub = "sub nsw i32"
     show Mul = "mul nsw i32"
     show Sdiv = "sdiv i32"
+    show Srem = "srem i32"
 
 data RelOp = EQ | NE | SGT | SGE | SLT | SLE
     deriving (Eq, Ord)
@@ -105,35 +116,35 @@ data Instruction =
 
 instance Show Instruction where
     show (Call retType ident args Nothing) =
-        "call " ++ show retType ++ " @" ++ ident
+        "\t" ++ "call " ++ show retType ++ " @" ++ ident
         ++ " (" ++ intercalate ", " (map showFnArg args) ++ ")"
     show (Call retType ident args (Just r)) =
         show r ++ " = call " ++ show retType ++ " @" ++ ident
         ++ " (" ++ intercalate ", " (map showFnArg args) ++ ")"
     show (Ret t v) =
-        "ret " ++ show t ++ " " ++ show v
-    show RetVoid = "ret void"
-    show (Alloc r t) = show r ++ " = alloca " ++ show t
+        "\t" ++ "ret " ++ show t ++ " " ++ show v
+    show RetVoid = "\t" ++"ret void"
+    show (Alloc r t) = "\t" ++show r ++ " = alloca " ++ show t
     -- store value from register/constant in location
    {-  show (Store v t loc) = "store " ++ show t ++ " " ++ show v ++ ", " ++ show (Ptr t) ++ " %" ++ show loc 
     show (Load r t loc) = show r ++ " = load " ++ show t ++ ", " ++ show (Ptr t) ++ " %" ++ show loc -}
-    show (Store v t r) = "store " ++ show t ++ " " ++ show v ++ ", " ++ show (Ptr t) ++ " " ++ show r
-    show (Load r t r2) = show r ++ " = load " ++ show t ++ ", " ++ show (Ptr t) ++ " " ++ show r2
-    show (DeclareGString loc s len) = "@" ++ stringPrefix ++ show loc ++ " = private unnamed_addr constant ["
+    show (Store v t r) = "\t" ++"store " ++ show t ++ " " ++ show v ++ ", " ++ show (Ptr t) ++ " " ++ show r
+    show (Load r t r2) = "\t" ++show r ++ " = load " ++ show t ++ ", " ++ show (Ptr t) ++ " " ++ show r2
+    show (DeclareGString loc s len) = "\t" ++"@" ++ stringPrefix ++ show loc ++ " = private unnamed_addr constant ["
         ++ show len ++ "x i8] c\"" ++ escape s ++ "\\00\", align 1"
-    show (Ari r op v1 v2) = show r ++ " = " ++ show op ++ " " ++ show v1 ++ ", " ++ show v2
-    show (Xor r v1 v2) = show r ++ " = xor i1 " ++ show v1 ++ ", " ++ show v2
-    show (Cmp r op t v1 v2) = show r ++ " = icmp " ++ show op ++ " " ++ show t ++ " " ++ show v1 ++ ", " ++ show v2
-    show (BrCond v l1 l2) = "br i1 " ++ show v ++ ", label %" ++ show l1 ++ ", label %" ++ show l2
-    show (Br l) = "br label %" ++ show l
+    show (Ari r op v1 v2) = "\t" ++show r ++ " = " ++ show op ++ " " ++ show v1 ++ ", " ++ show v2
+    show (Xor r v1 v2) = "\t" ++show r ++ " = xor i1 " ++ show v1 ++ ", " ++ show v2
+    show (Cmp r op t v1 v2) = "\t" ++show r ++ " = icmp " ++ show op ++ " " ++ show t ++ " " ++ show v1 ++ ", " ++ show v2
+    show (BrCond v l1 l2) = "\t" ++"br i1 " ++ show v ++ ", label %" ++ show l1 ++ ", label %" ++ show l2
+    show (Br l) = "\t" ++"br label %" ++ show l
     show (ILabel l) = show l ++ ":"
-    show (Phi r t pairs) = show r ++ " = phi " ++ show t ++ intercalate ", " (map showPair pairs)
+    show (Phi r t pairs) = "\t" ++show r ++ " = phi " ++ show t ++ intercalate ", " (map showPair pairs)
         where showPair (v, l) = "[ " ++ show v ++ ", %" ++ show l ++ " ]"
     show (Define t ident args) = "define " ++ show t ++ " @" ++ ident ++ "(" ++ intercalate ", " (map showPair args) ++ ") {"
         where showPair (t, r) = show t ++ " " ++ show r
     show ClosingBracket = "}"
     show DefineMain = "define i32 @main(i32 %argc, i8** %argv) {"
-    show (AllocStoreArg t r1 r2) = show (Alloc r2 t) ++ "\n" ++ show (Store (VRegister r1) t r2)
+    show (AllocStoreArg t r1 r2) = "\t" ++show (Alloc r2 t) ++ "\n" ++ show (Store (VRegister r1) t r2)
 
 
 stringPrefix = ".str."
