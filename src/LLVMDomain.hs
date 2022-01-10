@@ -22,6 +22,9 @@ llvmType (AbsLatte.Bool _) = I1
 llvmType (AbsLatte.Void _) = Void
 llvmType _ = Undef
 
+llvmArg :: AbsLatte.Arg -> (Type, AbsLatte.Ident)
+llvmArg (AbsLatte.Arg _ t ident) = (llvmType t, ident)
+
 data Register = Register Integer
     deriving (Eq, Ord)
 instance Show Register where
@@ -93,19 +96,23 @@ data Instruction =
     | Br Label
     | ILabel Label
     | Phi Register Type [(Value, Label)]
+    | Define Type String [(Type, Register)]
+    | ClosingBracket
+    | DefineMain
+    | AllocStoreArg Type Register Register
 
                deriving Eq
 
 instance Show Instruction where
-    show (Call retType ident args Nothing) = 
+    show (Call retType ident args Nothing) =
         "call " ++ show retType ++ " @" ++ ident
         ++ " (" ++ intercalate ", " (map showFnArg args) ++ ")"
-    show (Call retType ident args (Just r)) = 
+    show (Call retType ident args (Just r)) =
         show r ++ " = call " ++ show retType ++ " @" ++ ident
         ++ " (" ++ intercalate ", " (map showFnArg args) ++ ")"
     show (Ret t v) =
         "ret " ++ show t ++ " " ++ show v
-    show RetVoid = show "ret void"
+    show RetVoid = "ret void"
     show (Alloc r t) = show r ++ " = alloca " ++ show t
     -- store value from register/constant in location
    {-  show (Store v t loc) = "store " ++ show t ++ " " ++ show v ++ ", " ++ show (Ptr t) ++ " %" ++ show loc 
@@ -117,11 +124,16 @@ instance Show Instruction where
     show (Ari r op v1 v2) = show r ++ " = " ++ show op ++ " " ++ show v1 ++ ", " ++ show v2
     show (Xor r v1 v2) = show r ++ " = xor i1 " ++ show v1 ++ ", " ++ show v2
     show (Cmp r op t v1 v2) = show r ++ " = icmp " ++ show op ++ " " ++ show t ++ " " ++ show v1 ++ ", " ++ show v2
-    show (BrCond v l1 l2) = "br i1 " ++ show v ++ ", label %" ++ show l1 ++ ", label %" ++ show l2 
+    show (BrCond v l1 l2) = "br i1 " ++ show v ++ ", label %" ++ show l1 ++ ", label %" ++ show l2
     show (Br l) = "br label %" ++ show l
     show (ILabel l) = show l ++ ":"
     show (Phi r t pairs) = show r ++ " = phi " ++ show t ++ intercalate ", " (map showPair pairs)
         where showPair (v, l) = "[ " ++ show v ++ ", %" ++ show l ++ " ]"
+    show (Define t ident args) = "define " ++ show t ++ " @" ++ ident ++ "(" ++ intercalate ", " (map showPair args) ++ ") {"
+        where showPair (t, r) = show t ++ " " ++ show r
+    show ClosingBracket = "}"
+    show DefineMain = "define i32 @main(i32 %argc, i8** %argv) {"
+    show (AllocStoreArg t r1 r2) = show (Alloc r2 t) ++ "\n" ++ show (Store (VRegister r1) t r2)
 
 
 stringPrefix = ".str."
@@ -129,7 +141,7 @@ stringPrefix = ".str."
 showFnArg :: (Type, Value) -> String
 showFnArg (t, v) = show t ++ " " ++ show v
 
-escape :: String -> String 
+escape :: String -> String
 escape [] = []
 escape ('\\' : s) = "\\" ++ "5C"  ++ escape s
 escape ('\n' : s) = "\\" ++ "0A" ++ escape s

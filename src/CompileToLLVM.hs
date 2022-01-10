@@ -60,7 +60,7 @@ incCounter :: Counter -> Counter
 incCounter (Counter i) = Counter $ i+1
 castCounter :: Counter -> Integer
 castCounter (Counter i) = i
-newRegister :: CompilerM Integer
+newRegister :: CompilerM Integer -- TODO niech zwraca (Register old)
 newRegister = do
     cs <- get
     let old = castCounter (registerCounter cs) in do
@@ -119,15 +119,13 @@ compile tree = do
           putStrLn ( "managed to compile before error\n" ++
                     intercalate "\n" (map show (globInstructions state))
                     ++ "\n" ++ prologue
-                    ++ intercalate "\n" (map show (reverse $ instructions state))
-                    ++ epilogue)
+                    ++ intercalate "\n" (map show (reverse $ instructions state)))
           hPrint stderr e
           exitFailure
       Right _ -> putStrLn (
                     intercalate "\n" (map show (globInstructions state))
                     ++ "\n" ++ prologue
-                    ++ intercalate "\n" (map show (reverse $ instructions state))
-                    ++ epilogue)
+                    ++ intercalate "\n" (map show (reverse $ instructions state)))
 
 {- clearEmptyBlocks :: [Instruction] -> [Instruction]
 clearEmptyBlocks -}
@@ -144,11 +142,41 @@ registerBuiltInFn (ident, t) = do
     modify (\s -> s {functions = M.insert ident t (functions cs)})
 
 
-compileTopDef :: TopDef -> CompilerM CompStmtRes
-compileTopDef (FnDef p1 t ident args (Block p2 stmts)) =
+compileTopDef :: TopDef -> CompilerM ()
+compileTopDef (FnDef p1 t (Ident ident) args (Block p2 stmts)) = do
+    funArgs <- mapM (funArg . llvmArg) args
     case ident of
-        Ident "main" -> compileStmts stmts
-        _ -> defaultRes -- TODO add "ret void"" at the end of void funs
+        "main" -> do
+            addInstruction DefineMain
+            compileStmts stmts
+            addInstruction ClosingBracket
+        _ ->  do
+            addInstruction $ Define (llvmType t) ident (map funDefArg funArgs)
+            env <- declareFunArgs funArgs
+            local (const env) $ compileStmts stmts
+            when (llvmType t == LLVM.Void) (addInstruction RetVoid)
+            addInstruction ClosingBracket
+
+funDefArg :: (LLVM.Type, Ident, Register) -> (LLVM.Type, Register) 
+funDefArg (t, _, r) = (t, r)
+
+funArg :: (LLVM.Type, Ident) -> CompilerM (LLVM.Type, Ident, Register)
+funArg (t, ident) = do
+    r <- newRegister
+    return (t, ident, Register r)
+
+declareFunArg :: (LLVM.Type, Ident, Register) -> CompilerM VarsEnv
+declareFunArg (t, ident, r1) = do
+    r2 <- newRegister
+    addInstruction (LLVM.Alloc (Register r2) t)
+    addInstruction (LLVM.Store (VRegister r1) t (Register r2))
+    asks $ M.insert ident (t, r2)
+
+declareFunArgs :: [(LLVM.Type, Ident, Register)] -> CompilerM VarsEnv
+declareFunArgs [] = ask
+declareFunArgs (arg:funArgs) = do
+    env <- declareFunArg arg
+    local (const env) $ declareFunArgs funArgs
 
 
 compileStmts :: [Stmt] -> CompilerM CompStmtRes
@@ -176,7 +204,7 @@ compileStmt (AbsLatte.VRet p) = do
     env <- ask
     return (env, True)
 compileStmt (Decl p t (it:items)) = do
-    (env, _) <- declareVar t it
+    env <- declareVar t it
     --throwError $ Debug (show env)
     local (const env) $ compileStmt (Decl p t items)
     --env2 <- ask
@@ -247,10 +275,10 @@ compileStmt (CondElse _ expr s1 s2) = do
             addInstruction $ LLVM.ILabel (Label thenLabel)
             (_, ret1) <- compileStmt s1
             --throwError $ Debug ("then " ++ show s1 ++ show ret1)
-            when (not ret1) (addInstruction $ LLVM.Br (Label afterLabel))
+            unless ret1 (addInstruction $ LLVM.Br (Label afterLabel))
             addInstruction $ LLVM.ILabel (Label elseLabel)
             (_, ret2) <- compileStmt s2  -- TODO zmienic nazywanie labelek na "Label_i:"
-            when (not ret2) (addInstruction $ LLVM.Br (Label afterLabel)) -- TODO sprawdzac czy obie galęzie returnują. wtedy nie trzeba skakać i miec label after
+            unless ret2 (addInstruction $ LLVM.Br (Label afterLabel)) -- TODO sprawdzac czy obie galęzie returnują. wtedy nie trzeba skakać i miec label after
             when (not ret1 || not ret2) (addInstruction $ LLVM.ILabel (Label afterLabel)) -- TODO co jeśli ju nic nie ma po if else? daje nam to pusty blok
             env <- ask
             return (env, ret1 && ret2)
@@ -347,7 +375,7 @@ getVar ident = do
         Just (t, l) -> return (t, l)
         Nothing -> throwError $ FrontBug "get undeclared bar"
 
-declareVar :: AbsLatte.Type -> Item -> CompilerM CompStmtRes
+declareVar :: AbsLatte.Type -> Item -> CompilerM VarsEnv
 declareVar t item = do
     n <- newRegister
     addInstruction (LLVM.Alloc (Register n) (llvmType t))
@@ -360,13 +388,13 @@ declareVar t item = do
                     --addInstruction (LLVM.Store v t2 n)
                     addInstruction (LLVM.Store v t2 (Register n))
                     env <- ask
-                    return (M.insert ident (llvmType t, n) env, False)
+                    return (M.insert ident (llvmType t, n) env)
                 Nothing -> throwError $ FrontBug "void item in decl"
 
         NoInit p ident -> do
             --asks (M.insert ident (llvmType t, n))
             env <- ask
-            return (M.insert ident (llvmType t, n) env, False)
+            return (M.insert ident (llvmType t, n) env)
 
 compileExpr :: Expr -> CompilerM (LLVM.Type, Maybe Value)
 compileExpr (ELitInt p i) =
@@ -580,11 +608,7 @@ prologue =  indentLns [
     "declare i32 @compareStrings(i8*, i8*)",
     "declare i32 @equStrings(i8*, i8*)",
     "declare i32 @neStrings(i8*, i8*)",
-    "",
-    "define i32 @main(i32 %argc, i8** %argv) {"]
-
-epilogue = indentLns [
-  "}"]
+    ""]
 
 builtInFuns = [("printInt", LLVM.Void),
     ("printString", LLVM.Void),
