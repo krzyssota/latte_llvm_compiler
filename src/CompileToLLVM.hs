@@ -22,6 +22,9 @@ import Data.Set as S (Set, insert, member, empty)
 import Control.Exception (throw)
 import Data.Maybe
 import System.Exit (exitFailure)
+import Data.Functor.Classes (eq1)
+import Distribution.Compat.Lens (_1)
+import Distribution.PackageDescription.Check (checkConfiguredPackage)
 
 type VarsEnv = M.Map Ident (LLVM.Type, Loc)
 initialEnv = M.empty
@@ -42,7 +45,12 @@ initialCompilerState = CompilerState {
     functions = M.empty
 }
 type CompilerM = ReaderT VarsEnv (ExceptT MyError (StateT CompilerState IO))
-
+type RetInStmt = Bool
+type CompStmtRes = (VarsEnv, RetInStmt)
+defaultRes :: CompilerM  CompStmtRes
+defaultRes = do
+    env <- ask
+    return (env, False)
 newtype Counter = Counter Integer
 instance Show Counter where
     show (Counter i) = "Counter " ++ show i
@@ -58,6 +66,8 @@ newRegister = do
     let old = castCounter (registerCounter cs) in do
         modify (\s -> s {registerCounter = incCounter $ registerCounter cs})
         return old
+newLabel :: CompilerM Integer
+newLabel = newRegister
 newGlobal :: CompilerM Integer
 newGlobal = do
     cs <- get
@@ -109,16 +119,18 @@ compile tree = do
           putStrLn ( "managed to compile before error\n" ++
                     intercalate "\n" (map show (globInstructions state))
                     ++ "\n" ++ prologue
-                    ++ intercalate "\n" (reverse $ map show (instructions state))
+                    ++ intercalate "\n" (map show (reverse $ instructions state))
                     ++ epilogue)
-          hPutStrLn stderr $ show e
+          hPrint stderr e
           exitFailure
       Right _ -> putStrLn (
                     intercalate "\n" (map show (globInstructions state))
                     ++ "\n" ++ prologue
-                    ++ intercalate "\n" (reverse $ map show (instructions state))
+                    ++ intercalate "\n" (map show (reverse $ instructions state))
                     ++ epilogue)
 
+{- clearEmptyBlocks :: [Instruction] -> [Instruction]
+clearEmptyBlocks -}
 
 compile' :: Program -> CompilerM ()
 compile' (Program _ topDefs) = do
@@ -132,61 +144,210 @@ registerBuiltInFn (ident, t) = do
     modify (\s -> s {functions = M.insert ident t (functions cs)})
 
 
-compileTopDef :: TopDef -> CompilerM VarsEnv
-compileTopDef (FnDef p1 t ident args (Block p2 stmts)) = do
-    --throwError $ Test "halko"
+compileTopDef :: TopDef -> CompilerM CompStmtRes
+compileTopDef (FnDef p1 t ident args (Block p2 stmts)) =
     case ident of
         Ident "main" -> compileStmts stmts
-        _ -> ask
+        _ -> defaultRes -- TODO add "ret void"" at the end of void funs
 
 
-compileStmts :: [Stmt] -> CompilerM VarsEnv
-compileStmts [] = ask
+compileStmts :: [Stmt] -> CompilerM CompStmtRes
+compileStmts [] = defaultRes
 compileStmts (s:stmts) = do
-    env <- compileStmt s
-    local (const env) (compileStmts stmts)
+    (env, ret1) <- compileStmt s
+    (env2, ret2) <- local (const env) (compileStmts stmts)
+    return (env2, ret1 || ret2)
 
-compileStmt :: Stmt -> CompilerM VarsEnv
-compileStmt (Empty p) = ask
+compileStmt :: Stmt -> CompilerM CompStmtRes
+compileStmt (Empty p) = defaultRes
 compileStmt (SExp p expr) = do
-        (_, _) <- compileExpr expr
-        ask
+        compileExpr expr
+        defaultRes
 compileStmt (AbsLatte.Ret p expr) = do
     (t, v) <- compileExpr expr
     case v of
         Nothing -> throwError $ FrontBug "bad ret"
         Just val -> do
             addInstruction (LLVM.Ret t val)
-            ask
+            env <- ask
+            return (env, True)
 compileStmt (AbsLatte.VRet p) = do
-    addInstruction LLVM.VoidRet
-    ask
+    addInstruction LLVM.RetVoid
+    env <- ask
+    return (env, True)
 compileStmt (Decl p t (it:items)) = do
-    env <- declareVar t it
+    (env, _) <- declareVar t it
     --throwError $ Debug (show env)
     local (const env) $ compileStmt (Decl p t items)
     --env2 <- ask
     --throwError $ Debug (show env2) -- TODO usunac
-compileStmt (Decl p t []) = ask
+compileStmt (Decl p t []) = defaultRes
 compileStmt (BStmt p1 (Block p2 stmts)) = do
     env <- ask
-    local (const env) (compileStmts stmts)
-    return env
+    (_, ret) <- local (const env) (compileStmts stmts)
+    return (env, ret)
 compileStmt (Ass p1 ident expr) = do
     (t, v) <- compileExpr expr
-    env <- ask
-    case (M.lookup ident env, v) of
-        (Just (declT, loc), Just val) -> do
-            when (t /= declT) (throwError $ FrontBug "ass with wrong type")
-            addInstruction (LLVM.Store val t loc)
-            return env
-        (Nothing, _) -> throwError $ FrontBug "ass to not undeclared var"
-            --printDebug
-            --ask -- TODO usunac
-        (_, Nothing) -> throwError $ FrontBug "assigning void expr to var"
-compileStmt _ = throwError $ NotImplemented "compileStmt"
+    (declaredT, loc) <- getVar ident
+    when (t /= declaredT) (throwError $ FrontBug "ass with wrong type")
+    case v of
+        Just val -> do
+            --addInstruction (LLVM.Store val t loc)
+            addInstruction (LLVM.Store val t (Register loc))
 
-declareVar :: AbsLatte.Type -> Item -> CompilerM VarsEnv
+            defaultRes
+        Nothing -> throwError $ FrontBug "assigning void expr to var"
+compileStmt (Incr _ ident) = do
+    r1 <- newRegister
+    r2 <- newRegister
+    (t, l) <- getVar ident
+    --addInstruction $ LLVM.Load (Register r1) t l
+    addInstruction $ LLVM.Load (Register r1) t (Register l)
+    addInstruction $ LLVM.Ari (Register r2) LLVM.Add (VRegister $ Register r1) (VConst (ConstI 1))
+    --addInstruction $ LLVM.Store (VRegister $ Register r2) t l
+    addInstruction $ LLVM.Store (VRegister $ Register r2) t (Register l)
+
+    defaultRes
+compileStmt (Decr _ ident) = do
+    r1 <- newRegister
+    r2 <- newRegister
+    (t, l) <- getVar ident
+    --addInstruction $ LLVM.Load (Register r1) t l
+    addInstruction $ LLVM.Load (Register r1) t (Register l)
+    addInstruction $ LLVM.Ari (Register r2) LLVM.Add (VRegister $ Register r1) (VConst (ConstI (-1)))
+    --addInstruction $ LLVM.Store (VRegister $ Register r2) t l
+    addInstruction $ LLVM.Store (VRegister $ Register r2) t (Register l)
+    defaultRes
+compileStmt (Cond _ expr stmt) = do
+    (t, v) <- compileExpr expr
+    case (t, v) of
+        (I1, Just val) -> do
+            thenLabel <- newLabel
+            afterLabel <- newLabel
+            addInstruction $ LLVM.BrCond val (Label thenLabel) (Label afterLabel)
+            addInstruction $ LLVM.ILabel (Label thenLabel)
+            compileStmt stmt
+            addInstruction $ LLVM.Br (Label afterLabel)
+            addInstruction $ LLVM.ILabel (Label afterLabel)
+            defaultRes
+        _ -> throwError $ FrontBug "not bool cond in if"
+    -- TODO to, moze osobne compileCond w ktorym podaje labelki jako argumenty. i wykorzystać te funkcje teź w compileExpr And/Or
+{- compileStmt (CondElse _ (Not _ expr) stmt) = do
+    (t, v) <- compileExpr expr
+    case (t, v) of
+        (I8, Just val) -> do -}
+compileStmt (CondElse _ expr s1 s2) = do
+    (t, v) <- compileExpr expr
+    case (t, v) of
+        (I1, Just val) -> do
+            thenLabel <- newLabel
+            elseLabel <- newLabel
+            afterLabel <- newLabel
+            addInstruction $ LLVM.BrCond val (Label thenLabel) (Label elseLabel)
+            addInstruction $ LLVM.ILabel (Label thenLabel)
+            (_, ret1) <- compileStmt s1
+            --throwError $ Debug ("then " ++ show s1 ++ show ret1)
+            when (not ret1) (addInstruction $ LLVM.Br (Label afterLabel))
+            addInstruction $ LLVM.ILabel (Label elseLabel)
+            (_, ret2) <- compileStmt s2  -- TODO zmienic nazywanie labelek na "Label_i:"
+            when (not ret2) (addInstruction $ LLVM.Br (Label afterLabel)) -- TODO sprawdzac czy obie galęzie returnują. wtedy nie trzeba skakać i miec label after
+            when (not ret1 || not ret2) (addInstruction $ LLVM.ILabel (Label afterLabel)) -- TODO co jeśli ju nic nie ma po if else? daje nam to pusty blok
+            env <- ask
+            return (env, ret1 && ret2)
+        _ -> throwError $ FrontBug "not bool cond in ifelse"
+compileStmt (While _ expr stmt) = do
+    bodyLabel <- newLabel
+    checkCondLabel <- newLabel
+    afterLabel <- newLabel
+    addInstruction $ LLVM.Br (Label checkCondLabel)
+    addInstruction $ LLVM.ILabel (Label bodyLabel)
+    (_, ret) <- compileStmt stmt
+    --when (not ret) (newLabel >>= (\afterLabel -> addInstruction $ LLVM.Br (Label afterLabel)))
+    addInstruction $ LLVM.Br (Label afterLabel) -- there is always after label because ret in while is not for certain
+    addInstruction $ LLVM.ILabel (Label checkCondLabel)
+    (t, v) <- compileExpr expr
+    case (t, v) of
+        (I1, Just val) -> do
+            addInstruction $ LLVM.BrCond val (Label bodyLabel) (Label afterLabel)
+            addInstruction $ LLVM.ILabel (Label afterLabel)
+            defaultRes
+        _ -> throwError $ FrontBug "not bool cond in while"
+
+
+{-
+if (cond){
+	return 1;
+} else {
+	return 0;
+}
+
+
+define i32 @f() #0 {
+  %1 = alloca i32, align 4
+  %2 = alloca i8, align 1
+  %3 = load i8, i8* %2, align 1
+  %4 = trunc i8 %3 to i1
+  br i1 %4, label %5, label %6
+
+5:                                                ; preds = %0
+  store i32 1, i32* %1, align 4
+  br label %7
+
+6:                                                ; preds = %0
+  store i32 0, i32* %1, align 4
+  br label %7
+
+7:                                                ; preds = %6, %5
+  %8 = load i32, i32* %1, align 4
+  ret i32 %8
+}
+
+
+int main() {
+    bool b1 = true, b2 = false;
+    if (b1 || b2) {
+        return ;
+    } else {
+        return ;
+    }
+}
+
+define i32 @main() #0 {
+  %1 = alloca i32, align 4
+  %2 = alloca i8, align 1
+  %3 = alloca i8, align 1
+  store i32 0, i32* %1, align 4
+  store i8 1, i8* %2, align 1     ; b1 = true
+  store i8 0, i8* %3, align 1     ; b2 = false;
+
+  %4 = load i8, i8* %2, align 1
+  %5 = trunc i8 %4 to i1
+  br i1 %4, label %8, label %5    ; if b1 jmp 8 already_good else jmp 5 check_more
+
+5: check_more                                               ; preds = %0
+  %6 = load i8, i8* %2, align 1
+  %7 = trunc i8 %6 to i1
+  br i1 %7, label %8, label %9   ; if b2 jmp 8 good else jmp 9 else
+
+8: if already good                                                ; preds = %5, %0
+  br label %10                  ; jmp 10 end
+
+9: else                                                ; preds = %5
+  br label %10                  ; step 10 end
+
+10:                                               ; preds = %9, %8
+  ret void
+
+-}
+
+getVar :: Ident -> CompilerM (LLVM.Type, Loc)
+getVar ident = do
+    env <- ask
+    case M.lookup ident env of
+        Just (t, l) -> return (t, l)
+        Nothing -> throwError $ FrontBug "get undeclared bar"
+
+declareVar :: AbsLatte.Type -> Item -> CompilerM CompStmtRes
 declareVar t item = do
     n <- newRegister
     addInstruction (LLVM.Alloc (Register n) (llvmType t))
@@ -196,38 +357,190 @@ declareVar t item = do
             when (llvmType t /= t2) (throwError $ FrontBug "decl mismatched types")
             case v of
                 Just v -> do
-                    addInstruction (LLVM.Store v t2 n)
-                    asks (M.insert ident (llvmType t, n))
+                    --addInstruction (LLVM.Store v t2 n)
+                    addInstruction (LLVM.Store v t2 (Register n))
+                    env <- ask
+                    return (M.insert ident (llvmType t, n) env, False)
                 Nothing -> throwError $ FrontBug "void item in decl"
 
         NoInit p ident -> do
-            asks (M.insert ident (llvmType t, n))
+            --asks (M.insert ident (llvmType t, n))
+            env <- ask
+            return (M.insert ident (llvmType t, n) env, False)
 
 compileExpr :: Expr -> CompilerM (LLVM.Type, Maybe Value)
-compileExpr (ELitInt p i) = do
+compileExpr (ELitInt p i) =
         return (I32, Just (VConst (ConstI i)))
 compileExpr (EApp p ident exprs) = do
         args_ <- mapM compileExpr exprs
         args <- mapM unJustify args_
         call ident args
-compileExpr (ELitTrue p) = do
+compileExpr (ELitTrue p) =
     return (I1, Just (VConst ConstT))
-compileExpr (ELitFalse p) = do
+compileExpr (ELitFalse p) =
     return (I1, Just (VConst ConstF))
 compileExpr (EVar p ident) = do
     n <- newRegister
     env <- ask
     case M.lookup ident env of
         Just (t, ptr) -> do
-            addInstruction (Load (Register n) t ptr)
+            --addInstruction (Load (Register n) t ptr)
+            addInstruction (Load (Register n) t (Register ptr))
             return (t, Just $ VRegister (Register n))
         Nothing -> throwError $ FrontBug "undefined var"
 compileExpr (EString p s) = do
     n <- newGlobal
     addGlobalInstruction $ DeclareGString n s (length s + 1)
     return (LLVM.Ptr I8, Just $ GetElemPtr n (length s + 1))
+compileExpr (EAdd p e1 addOp e2) = do
+    (t1, v1) <- compileExpr e1
+    (t2, v2) <- compileExpr e2
+    case (t1, v1, t2, v2) of
+        (_, Nothing, _, _) -> throwError $ FrontBug "ari op with void expr"
+        (_, _, _, Nothing) -> throwError $ FrontBug "ari op with void expr"
+        (I32, Just val1, I32, Just val2) -> do
+                r <- newRegister
+                addInstruction $ LLVM.Ari (Register r) LLVM.Add val1 val2
+                return (t1, Just $ VRegister (Register r))
+        (Ptr I8, Just val1, Ptr I8, Just val2) ->
+                call (Ident "concatStrings") [(t1, val1), (t2, val2)]
+        _ -> throwError $FrontBug "ari op with wrong type"
+compileExpr (EMul p e1 addOp e2) = do
+    (t1, v1) <- compileExpr e1
+    (t2, v2) <- compileExpr e2
+    case (t1, v1, t2, v2) of
+        (_, Nothing, _, _) -> throwError $ FrontBug "ari op with void expr"
+        (_, _, _, Nothing) -> throwError $ FrontBug "ari op with void expr"
+        (I32, Just val1, I32, Just val2) -> do
+                r <- newRegister
+                addInstruction $ LLVM.Ari (Register r) LLVM.Mul val1 val2
+                return (t1, Just $ VRegister (Register r))
+        _ -> throwError $FrontBug "ari op with wrong type"
+compileExpr (ERel _ e1 relOp e2) = do
+    (t1, v1) <- compileExpr e1
+    (t2, v2) <- compileExpr e2
+    case (t1, v1, t2, v2) of
+        (_, Nothing, _, _) -> throwError $ FrontBug "ari op with void expr"
+        (_, _, _, Nothing) -> throwError $ FrontBug "ari op with void expr"
+        (I32, Just val1, I32, Just val2) -> do
+                r <- newRegister
+                addInstruction $ LLVM.Cmp (Register r) (llvmRelOp relOp) I32 val1 val2
+                return (I1, Just $ VRegister (Register r))
+        (Ptr I8, Just val1, Ptr I8, Just val2) -> do
+            case relOp of
+                EQU _ -> do
+                    (_, v) <- call (Ident "equStrings") [(t1, val1), (t2, val2)]
+                    return (I1, v)
+                AbsLatte.NE _ -> do
+                    (_, v) <- call (Ident "neStrings") [(t1, val1), (t2, val2)]
+                    return (I1, v)
+                _ -> throwError $ FrontBug "string relOp other than EQU NE"
+        _ -> throwError $FrontBug "ari op with wrong type"
+compileExpr (Neg _ expr) = do
+    (t, v) <- compileExpr expr
+    case (t, v) of
+        (I32, Just val) -> do
+            r <- newRegister
+            addInstruction $ LLVM.Ari (Register r) LLVM.Sub (VConst (ConstI 0)) val
+            return (I32, Just $ VRegister (Register r))
+        (_, Just val) -> throwError $ FrontBug "neg of not i32 type"
+        (_, Nothing) -> throwError $ FrontBug "neg of void expr"
+compileExpr (Not _ expr) = do
+    (t, v) <- compileExpr expr
+    case (t, v) of
+        (I1, Just val) -> do
+            r <- newRegister
+            addInstruction $ LLVM.Xor (Register r) val (VConst ConstT)
+            return (I1, Just $ VRegister (Register r))
+        (_, Just val) -> throwError $ FrontBug "not of not i1 type"
+        (_, Nothing) -> throwError $ FrontBug "not of void expr"
+compileExpr (EAnd _ e1 e2) = do -- TODO przetestować jak bedzie if
+    entryLabel <- newLabel
+    addInstruction $ LLVM.Br (Label entryLabel) -- maybe add currLabel: Maybe Label, in CompilerState to add if neccesarry
+    addInstruction $ LLVM.ILabel (Label entryLabel)
+    (t1, v1) <- compileExpr e1
+    case (t1, v1) of
+        (I1, Just val1) -> do
+            labelExpr1True <- newLabel
+            labelAfter <- newLabel
+            addInstruction $ LLVM.BrCond val1 (Label labelExpr1True) (Label labelAfter)
+            addInstruction $ LLVM.ILabel (Label labelExpr1True)
+            (t2, v2) <- compileExpr e2
+            case (t2, v2) of
+                (I1, Just val2) -> do
+                    addInstruction $ LLVM.Br (Label labelAfter)
+                    addInstruction $ LLVM.ILabel (Label labelAfter)
+                    n <- newRegister
+                    addInstruction $ LLVM.Phi (Register n) I1 [(VConst ConstF, Label entryLabel), (val2, Label labelExpr1True)]
+                    return (I1, Just $ VRegister (Register n))
+                _ -> throwError $ FrontBug "true %% void e2"
+        _ -> throwError $ FrontBug "void e1 %% e2"
+compileExpr (EOr _ e1 e2) = do
+    entryLabel <- newLabel
+    addInstruction $ LLVM.Br (Label entryLabel)
+    addInstruction $ LLVM.ILabel (Label entryLabel)
+    (t1, v1) <- compileExpr e1
+    case (t1, v1) of
+        (I1, Just val1) -> do
+            labelExpr1False <- newLabel
+            labelAfter <- newLabel
+            addInstruction $ LLVM.BrCond val1 (Label labelAfter) (Label labelExpr1False)
+            addInstruction $ LLVM.ILabel (Label labelExpr1False)
+            (t2, v2) <- compileExpr e2
+            case (t2, v2) of
+                (I1, Just val2) -> do
+                    addInstruction $ LLVM.Br (Label labelAfter)
+                    addInstruction $ LLVM.ILabel (Label labelAfter)
+                    n <- newRegister
+                    addInstruction $ LLVM.Phi (Register n) I1 [(VConst ConstT, Label entryLabel), (val2, Label labelExpr1False)]
+                    return (I1, Just $ VRegister (Register n))
+                _ -> throwError $ FrontBug "true || void e2"
+        _ -> throwError $ FrontBug "void e1 || e2"
 
-compileExpr _ = throwError $ NotImplemented "compileExpr"
+{-
+bool b1 = true;
+bool b2 = false;
+bool b = b1 && b2;
+
+define void @f() #0 {
+  %1 = alloca i8, align 1         ;  b1
+  %2 = alloca i8, align 1         ;  b2
+  %3 = alloca i8, align 1         
+  store i8 1, i8* %1, align 1
+  store i8 0, i8* %2, align 1
+
+  %4 = load i8, i8* %1, align 1
+  %5 = trunc i8 %4 to i1
+
+  br i1 %5, label %6, label %9      ; if %5 jmp %6 else jmp %7
+
+6:                                                ; preds = %0
+  %7 = load i8, i8* %2, align 1
+  %8 = trunc i8 %7 to i1
+  br label %9
+
+9:                                                ; preds = %6, %0
+  %10 = phi i1 [ false, %0 ], [ %8, %6 ]
+
+  %11 = zext i1 %10 to i8
+  store i8 %11, i8* %3, align 1
+  ret void
+}
+
+
+
+w1 && w2
+if not w1 goto Lfalse
+if not w2 goto Lfalse
+code for Ltrue
+Lfalse: 
+
+w1 || w2
+if w1 goto Ltrue
+if w2 goto Ltrue
+code for Lfalse
+Ltrue: 
+-}
 
 unJustify :: (LLVM.Type, Maybe Value) -> CompilerM(LLVM.Type, Value)
 unJustify (t, Just v) = return (t, v)
@@ -263,13 +576,26 @@ prologue =  indentLns [
     "declare i32 @readInt()",
     "declare i8* @readString()",
     "declare void @error()",
+    "declare i8* @concatStrings(i8*, i8*)",
+    "declare i32 @compareStrings(i8*, i8*)",
+    "declare i32 @equStrings(i8*, i8*)",
+    "declare i32 @neStrings(i8*, i8*)",
     "",
     "define i32 @main(i32 %argc, i8** %argv) {"]
 
 epilogue = indentLns [
   "}"]
 
-builtInFuns = [("printInt", LLVM.Void), ("printString", LLVM.Void), ("readInt", I32),("readString", Ptr I8),("error", LLVM.Void)]
+builtInFuns = [("printInt", LLVM.Void),
+    ("printString", LLVM.Void),
+    ("readInt", I32),
+    ("readString", Ptr I8),
+    ("error", LLVM.Void),
+    ("concatStrings", Ptr I8),
+    ("compareStrings", I32),
+    ("equStrings", I32),
+    ("neStrings", I32)
+    ]
 
 printDebug :: CompilerM ()
 printDebug = do

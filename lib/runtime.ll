@@ -15,7 +15,6 @@ target triple = "arm64-apple-macosx12.0.0"
 @.str.4 = private unnamed_addr constant [3 x i8] c"%d\00", align 1
 @.str.5 = private unnamed_addr constant [26 x i8] c"readString getline error\0A\00", align 1
 @.str.6 = private unnamed_addr constant [15 x i8] c"runtime error\0A\00", align 1
-@.str.7 = private unnamed_addr constant [1 x i8] zeroinitializer, align 1
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable
 define void @printInt(i32 %0) #0 {
@@ -132,7 +131,7 @@ define void @error() #0 {
 }
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable
-define i8* @concatStrings_____(i8* %0, i8* %1) #0 {
+define i8* @concatStrings(i8* %0, i8* %1) #0 {
   %3 = alloca i8*, align 8
   %4 = alloca i8*, align 8
   %5 = alloca i8*, align 8
@@ -214,82 +213,80 @@ declare i8* @__memcpy_chk(i8*, i8*, i64, i64) #4
 declare i64 @llvm.objectsize.i64.p0i8(i8*, i1 immarg, i1 immarg, i1 immarg) #5
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable
-define i32 @compareStrings_____(i8* %0, i8* %1) #0 {
+define i32 @equStrings(i8* %0, i8* %1) #0 {
   %3 = alloca i32, align 4
   %4 = alloca i8*, align 8
   %5 = alloca i8*, align 8
-  %6 = alloca i32, align 4
   store i8* %0, i8** %4, align 8
   store i8* %1, i8** %5, align 8
-  %7 = load i8*, i8** %4, align 8
-  %8 = icmp eq i8* %7, null
-  br i1 %8, label %9, label %15
+  %6 = load i8*, i8** %4, align 8
+  %7 = icmp eq i8* %6, null
+  br i1 %7, label %8, label %11
 
-9:                                                ; preds = %2
-  %10 = load i8*, i8** %5, align 8
-  %11 = icmp ne i8* %10, null
-  br i1 %11, label %12, label %15
+8:                                                ; preds = %2
+  %9 = load i8*, i8** %5, align 8
+  %10 = icmp ne i8* %9, null
+  br i1 %10, label %17, label %11
 
-12:                                               ; preds = %9
-  %13 = load i8*, i8** %5, align 8
-  %14 = call i32 @strcmp(i8* getelementptr inbounds ([1 x i8], [1 x i8]* @.str.7, i64 0, i64 0), i8* %13)
-  store i32 %14, i32* %6, align 4
-  br label %37
+11:                                               ; preds = %8, %2
+  %12 = load i8*, i8** %4, align 8
+  %13 = icmp ne i8* %12, null
+  br i1 %13, label %14, label %18
 
-15:                                               ; preds = %9, %2
-  %16 = load i8*, i8** %4, align 8
-  %17 = icmp ne i8* %16, null
-  br i1 %17, label %18, label %24
+14:                                               ; preds = %11
+  %15 = load i8*, i8** %5, align 8
+  %16 = icmp eq i8* %15, null
+  br i1 %16, label %17, label %18
 
-18:                                               ; preds = %15
-  %19 = load i8*, i8** %5, align 8
+17:                                               ; preds = %14, %8
+  store i32 0, i32* %3, align 4
+  br label %32
+
+18:                                               ; preds = %14, %11
+  %19 = load i8*, i8** %4, align 8
   %20 = icmp eq i8* %19, null
-  br i1 %20, label %21, label %24
+  br i1 %20, label %21, label %25
 
 21:                                               ; preds = %18
-  %22 = load i8*, i8** %4, align 8
-  %23 = call i32 @strcmp(i8* %22, i8* getelementptr inbounds ([1 x i8], [1 x i8]* @.str.7, i64 0, i64 0))
-  store i32 %23, i32* %6, align 4
-  br label %36
+  %22 = load i8*, i8** %5, align 8
+  %23 = icmp eq i8* %22, null
+  br i1 %23, label %24, label %25
 
-24:                                               ; preds = %18, %15
-  %25 = load i8*, i8** %4, align 8
-  %26 = icmp eq i8* %25, null
-  br i1 %26, label %27, label %31
+24:                                               ; preds = %21
+  store i32 1, i32* %3, align 4
+  br label %32
 
-27:                                               ; preds = %24
-  %28 = load i8*, i8** %5, align 8
-  %29 = icmp eq i8* %28, null
-  br i1 %29, label %30, label %31
+25:                                               ; preds = %21, %18
+  %26 = load i8*, i8** %4, align 8
+  %27 = load i8*, i8** %5, align 8
+  %28 = call i32 @strcmp(i8* %26, i8* %27)
+  %29 = icmp ne i32 %28, 0
+  %30 = xor i1 %29, true
+  %31 = zext i1 %30 to i32
+  store i32 %31, i32* %3, align 4
+  br label %32
 
-30:                                               ; preds = %27
-  store i32 0, i32* %3, align 4
-  br label %39
-
-31:                                               ; preds = %27, %24
-  %32 = load i8*, i8** %4, align 8
-  %33 = load i8*, i8** %5, align 8
-  %34 = call i32 @strcmp(i8* %32, i8* %33)
-  store i32 %34, i32* %6, align 4
-  br label %35
-
-35:                                               ; preds = %31
-  br label %36
-
-36:                                               ; preds = %35, %21
-  br label %37
-
-37:                                               ; preds = %36, %12
-  %38 = load i32, i32* %6, align 4
-  store i32 %38, i32* %3, align 4
-  br label %39
-
-39:                                               ; preds = %37, %30
-  %40 = load i32, i32* %3, align 4
-  ret i32 %40
+32:                                               ; preds = %25, %24, %17
+  %33 = load i32, i32* %3, align 4
+  ret i32 %33
 }
 
 declare i32 @strcmp(i8*, i8*) #1
+
+; Function Attrs: noinline nounwind optnone ssp uwtable
+define i32 @neStrings(i8* %0, i8* %1) #0 {
+  %3 = alloca i8*, align 8
+  %4 = alloca i8*, align 8
+  store i8* %0, i8** %3, align 8
+  store i8* %1, i8** %4, align 8
+  %5 = load i8*, i8** %3, align 8
+  %6 = load i8*, i8** %4, align 8
+  %7 = call i32 @equStrings(i8* %5, i8* %6)
+  %8 = icmp ne i32 %7, 0
+  %9 = xor i1 %8, true
+  %10 = zext i1 %9 to i32
+  ret i32 %10
+}
 
 attributes #0 = { noinline nounwind optnone ssp uwtable "frame-pointer"="non-leaf" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="apple-m1" "target-features"="+aes,+crc,+crypto,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+v8.5a,+zcm,+zcz" }
 attributes #1 = { "frame-pointer"="non-leaf" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="apple-m1" "target-features"="+aes,+crc,+crypto,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+v8.5a,+zcm,+zcz" }

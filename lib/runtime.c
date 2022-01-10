@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 extern void printInt(int n) { printf("%d\n", n); }
 
@@ -44,7 +45,7 @@ void error() {
     exit(1);
 }
 
-char* concatStrings_____(char* str1, char* str2) {
+char* concatStrings(char* str1, char* str2) {
     if (str1 == NULL) return str2;
     if (str2 == NULL) return str1;
 
@@ -58,7 +59,7 @@ char* concatStrings_____(char* str1, char* str2) {
     return result;
 }
 
-int compareStrings_____(char* str1, char* str2) {
+/* int compareStrings_____(char* str1, char* str2) {
     int res;
     if (str1 == NULL && str2 != NULL) {
         res = strcmp("", str2);
@@ -71,4 +72,18 @@ int compareStrings_____(char* str1, char* str2) {
     }
 
     return res;
+} */
+
+int equStrings(char* str1, char* str2) {
+    if ((str1 == NULL && str2 != NULL) || (str1 != NULL && str2 == NULL)) {
+        return 0;
+    } else if (str1 == NULL && str2 == NULL) {
+        return 1;
+    } else {
+        return !strcmp(str1, str2);
+    }
+}
+
+int neStrings(char* str1, char* str2) {
+    return !equStrings(str1, str2);
 }

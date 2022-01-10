@@ -7,9 +7,9 @@ SRC=src
 #BNFC=/home/students/inf/PUBLIC/MRJP/bin/bnfc
 BNFC=bnfc
 
-.PHONY : all clean distclean
+.PHONY : all clean distclean lib
 
-all: bnfc RunStaticAnalysis
+all: bnfc lib RunStaticAnalysis
 
 bnfc: $(SRC)/Latte.cf
 	cd $(SRC) && ${BNFC} -m --functor -haskell Latte.cf && make && cd ..
@@ -20,8 +20,9 @@ bnfc: $(SRC)/Latte.cf
 %.hs : %.x
 	${ALEX} ${ALEX_OPTS} $<
 
-runtime:
+lib:
 	clang -O0 -o lib/runtime.ll -emit-llvm -S lib/runtime.c
+	llvm-as -o lib/runtime.bc lib/runtime.ll
 
 RunStaticAnalysis: $(SRC)/RunStaticAnalysis.hs $(SRC)/StaticAnalysis.hs $(SRC)/AbsLatte.hs $(SRC)/LexLatte.hs $(SRC)/ParLatte.hs $(SRC)/PrintLatte.hs
 	cd $(SRC) && ${GHC} ${GHC_OPTS} $@ && mv RunStaticAnalysis latc
