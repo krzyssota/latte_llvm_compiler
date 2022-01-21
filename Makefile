@@ -7,7 +7,7 @@ SRC=src
 #BNFC=/home/students/inf/PUBLIC/MRJP/bin/bnfc
 BNFC=bnfc
 
-.PHONY : all clean distclean lib
+.PHONY : all clean distclean lib cbl
 
 all: bnfc lib RunStaticAnalysis
 
@@ -19,6 +19,9 @@ bnfc: $(SRC)/Latte.cf
 
 %.hs : %.x
 	${ALEX} ${ALEX_OPTS} $<
+
+cbl:
+	 cabal install ordered-containers
 
 lib:
 	clang -O0 -o lib/runtime.ll -emit-llvm -S lib/runtime.c

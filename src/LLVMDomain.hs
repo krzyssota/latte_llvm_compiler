@@ -35,7 +35,7 @@ llvmMulOp mulOp = case mulOp of
                     AbsLatte.Div _ -> Sdiv
                     AbsLatte.Mod _ -> Srem
 
-data Register = Register Integer
+newtype Register = Register Integer
     deriving (Eq, Ord)
 instance Show Register where
     show (Register i) = "%r_" ++ show i
@@ -94,9 +94,6 @@ data Instruction =
     | Ret Type Value
     | RetVoid
     | Alloc Register Type
-    {- | Store Value Type Loc
-    | Load Register Type Loc
-    | DeclareGString Loc String Int -}
     | Store Value Type Register
     | Load Register Type Register
     | DeclareGString Loc String Int
@@ -110,8 +107,6 @@ data Instruction =
     | Define Type String [(Type, Register)]
     | ClosingBracket
     | DefineMain
-    | AllocStoreArg Type Register Register
-
                deriving Eq
 
 instance Show Instruction where
@@ -125,9 +120,6 @@ instance Show Instruction where
         "\t" ++ "ret " ++ show t ++ " " ++ show v
     show RetVoid = "\t" ++"ret void"
     show (Alloc r t) = "\t" ++show r ++ " = alloca " ++ show t
-    -- store value from register/constant in location
-   {-  show (Store v t loc) = "store " ++ show t ++ " " ++ show v ++ ", " ++ show (Ptr t) ++ " %" ++ show loc 
-    show (Load r t loc) = show r ++ " = load " ++ show t ++ ", " ++ show (Ptr t) ++ " %" ++ show loc -}
     show (Store v t r) = "\t" ++"store " ++ show t ++ " " ++ show v ++ ", " ++ show (Ptr t) ++ " " ++ show r
     show (Load r t r2) = "\t" ++show r ++ " = load " ++ show t ++ ", " ++ show (Ptr t) ++ " " ++ show r2
     show (DeclareGString loc s len) = "\t" ++"@" ++ stringPrefix ++ show loc ++ " = private unnamed_addr constant ["
@@ -144,7 +136,6 @@ instance Show Instruction where
         where showPair (t, r) = show t ++ " " ++ show r
     show ClosingBracket = "}"
     show DefineMain = "define i32 @main(i32 %argc, i8** %argv) {"
-    show (AllocStoreArg t r1 r2) = "\t" ++show (Alloc r2 t) ++ "\n" ++ show (Store (VRegister r1) t r2)
 
 
 stringPrefix = ".str."
@@ -159,94 +150,3 @@ escape ('\n' : s) = "\\" ++ "0A" ++ escape s
 escape ('\t' : s) = "\\" ++ "09" ++ escape s
 escape ('"' : s) = "\\" ++ "22" ++ escape s
 escape (c : s) = c : escape s
-
-{-
-goto L2
-L1: body
-L2: condition code, result in t
-if t goto L1
-
-
-	if (b) {
-		int x = 1;
-	}
-	return 2;
-
-
-  br i1 %4, label %5, label %6
-
-5:                                                ; preds = %0
-  store i32 1, i32* %2, align 4
-  br label %6
-
-6:                                                ; preds = %5, %0
-  ret i32 2
-
-
-
-
-if (cond){
-	return 1;
-} else {
-	return 0;
-}
-
-
-define i32 @f() #0 {
-  %1 = alloca i32, align 4
-  %2 = alloca i8, align 1
-  %3 = load i8, i8* %2, align 1
-
-  %4 = trunc i8 %3 to i1
-  br i1 %4, label %5, label %6    ; if cond jmp 5 else jmp 6
-
-5:  then block                                      ; preds = %0
-  store i32 1, i32* %1, align 4
-  br label %7
-
-6:   else block                                   ; preds = %0
-  store i32 0, i32* %1, align 4
-  br label %7
-
-7:   after block                                  ; preds = %6, %5
-  %8 = load i32, i32* %1, align 4
-  ret i32 %8
-}
-
-
-int main() {
-    bool b1 = true, b2 = false;
-    if (b1 || b2) {
-        return ;
-    } else {
-        return ;
-    }
-}
-
-define i32 @main() #0 {
-  %1 = alloca i32, align 4
-  %2 = alloca i8, align 1
-  %3 = alloca i8, align 1
-  store i32 0, i32* %1, align 4
-  store i8 1, i8* %2, align 1     ; b1 = true
-  store i8 0, i8* %3, align 1     ; b2 = false;
-
-  %4 = load i8, i8* %2, align 1
-  %5 = trunc i8 %4 to i1
-  br i1 %4, label %8, label %5    ; if b1 jmp 8 already_good else jmp 5 check_more
-
-5: check_more                                               ; preds = %0
-  %6 = load i8, i8* %2, align 1
-  %7 = trunc i8 %6 to i1
-  br i1 %7, label %8, label %9   ; if b2 jmp 8 good else jmp 9 else
-
-8: if already good                                                ; preds = %5, %0
-  br label %10                  ; jmp 10 end
-
-9: else                                                ; preds = %5
-  br label %10                  ; step 10 end
-
-10:                                               ; preds = %9, %8
-  ret void
-
--}

@@ -131,7 +131,7 @@ define void @error() #0 {
 }
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable
-define i8* @concatStrings(i8* %0, i8* %1) #0 {
+define i8* @__concatStrings__(i8* %0, i8* %1) #0 {
   %3 = alloca i8*, align 8
   %4 = alloca i8*, align 8
   %5 = alloca i8*, align 8
@@ -213,7 +213,7 @@ declare i8* @__memcpy_chk(i8*, i8*, i64, i64) #4
 declare i64 @llvm.objectsize.i64.p0i8(i8*, i1 immarg, i1 immarg, i1 immarg) #5
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable
-define i32 @equStrings(i8* %0, i8* %1) #0 {
+define i32 @__equStrings__(i8* %0, i8* %1) #0 {
   %3 = alloca i32, align 4
   %4 = alloca i8*, align 8
   %5 = alloca i8*, align 8
@@ -274,14 +274,14 @@ define i32 @equStrings(i8* %0, i8* %1) #0 {
 declare i32 @strcmp(i8*, i8*) #1
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable
-define i32 @neStrings(i8* %0, i8* %1) #0 {
+define i32 @__neStrings__(i8* %0, i8* %1) #0 {
   %3 = alloca i8*, align 8
   %4 = alloca i8*, align 8
   store i8* %0, i8** %3, align 8
   store i8* %1, i8** %4, align 8
   %5 = load i8*, i8** %3, align 8
   %6 = load i8*, i8** %4, align 8
-  %7 = call i32 @equStrings(i8* %5, i8* %6)
+  %7 = call i32 @__equStrings__(i8* %5, i8* %6)
   %8 = icmp ne i32 %7, 0
   %9 = xor i1 %8, true
   %10 = zext i1 %9 to i32
