@@ -105,7 +105,6 @@ data Instruction =
     | ILabel Label
     | Phi Register Type [(Value, Label)]
     | Define Type String [(Type, Register)]
-    | ClosingBracket
     | DefineMain
                deriving Eq
 
@@ -134,7 +133,6 @@ instance Show Instruction where
         where showPair (v, l) = "[ " ++ show v ++ ", %" ++ show l ++ " ]"
     show (Define t ident args) = "define " ++ show t ++ " @" ++ ident ++ "(" ++ intercalate ", " (map showPair args) ++ ") {"
         where showPair (t, r) = show t ++ " " ++ show r
-    show ClosingBracket = "}"
     show DefineMain = "define i32 @main(i32 %argc, i8** %argv) {"
 
 

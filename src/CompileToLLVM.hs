@@ -4,6 +4,7 @@
 
 module CompileToLLVM where
 import LLVMDomain as LLVM
+import Structures
 import Control.Monad.IO.Class
 import Control.Monad.State
 import Control.Monad.Reader
@@ -27,48 +28,12 @@ import Distribution.Compat.Lens (_1)
 import Distribution.PackageDescription.Check (checkConfiguredPackage)
 import StaticAnalysis (internalPos)
 
-type VarsEnv = M.Map Ident (LLVM.Type, Register)
-initialEnv = M.empty
-type FnEnv = M.Map String LLVM.Type -- ret type
-type FunsCode = M.Map String (M.Map Label [Instruction])
--- TODO trzymac osobno wszystkie funkcje i w nich dopiero mieć instrukcje (mape label->blok)
-data CompilerState = CompilerState {
-    registerCounter :: Counter,
-    labelCounter :: Counter,
-    globalsCounter :: Counter,
-    globInstructions :: [Instruction],
-    funsCode :: FunsCode,
-    fnEnv :: FnEnv,
-    currLabel :: Label,
-    currFun :: String
-} deriving (Show)
-initialCompilerState :: CompilerState
-initialCompilerState = CompilerState {
-    registerCounter = newCounter,
-    labelCounter = newCounter,
-    globalsCounter = newCounter,
-    globInstructions = [],
-    funsCode = M.empty,
-    fnEnv = M.empty,
-    currLabel = Label 0,
-    currFun = "placeholder"
-}
-type CompilerM = ReaderT VarsEnv (ExceptT MyError (StateT CompilerState IO))
-type RetInStmt = Bool
-type CompStmtRes = (VarsEnv, RetInStmt)
-defaultRes :: CompilerM  CompStmtRes
+
+defaultRes :: CompilerM CompStmtRes
 defaultRes = do
     env <- ask
     return (env, False)
-newtype Counter = Counter Int
-instance Show Counter where
-    show (Counter i) = "Counter " ++ show i
-newCounter :: Counter
-newCounter = Counter 1
-incCounter :: Counter -> Counter
-incCounter (Counter i) = Counter $ i+1
-castCounter :: Counter -> Int
-castCounter (Counter i) = i
+
 getNext :: CompilerM Int
 getNext = do
     cs <- get
@@ -96,27 +61,26 @@ newGlobal = do
         modify (\s -> s {globalsCounter = incCounter $ globalsCounter cs})
         return old
 
-getCurrLabel :: CompilerM Label
-getCurrLabel = gets currLabel
-
 -- type FunsCode = M.Map String (M.Map Label [Instruction])
 startNewFun :: String -> Instruction -> CompilerM ()
 startNewFun ident def = do
     cs <- get
-    let funs = funsCode cs
-    let newFun = M.fromList [(Label 0, [def]), (Label maxBound, [ClosingBracket])]
-    let newFunsCode = M.insert ident newFun funs
-    modify (\s -> s {funsCode = newFunsCode, currFun = ident, currLabel = Label 0})
+    let l0 = Label 0
+    let bb = newBlock l0
+    let newFun = FunCFG {ident = ident, def = def, blocks = M.fromList [(l0, bb)], currLabel = l0}
+    let newFuns = M.insert ident newFun (funs cs)
+    modify (\s -> s {funs = newFuns, currFun = ident})
 
 startNewBlock :: Label -> CompilerM()
 startNewBlock label = do
     cs <- get
-    let funs = funsCode cs
-    let funIdent = currFun cs
-    funCode <- getJust (M.lookup funIdent funs) ("[StNewBl] funIdent in funs" ++ show funIdent ++ show funs)
-    let newFunCode = M.insert label [LLVM.ILabel label] funCode
-    let newFuns = M.insert funIdent newFunCode funs
-    modify (\s -> s {currLabel = label, funsCode = newFuns})
+    let currFunIdent = currFun cs
+    let currFuns = funs cs
+    funCFG <- justLookup currFunIdent currFuns ("[StNewBl] funIdent in funs" ++ show currFunIdent ++ show currFuns)
+    --let newFunCode = M.insert label [LLVM.ILabel label] funCode
+    let block = newBlock label
+    let newFunCFG = addBlockToCFG label block funCFG
+    modify (\s -> s{funs = M.insert currFunIdent newFunCFG currFuns})
 
     --modify (\s -> s {currLabel = label, funsCode = (M.insert label [LLVM.ILabel label] funIns):rest})
     --modify (\s -> s {currLabel = label, instructions = LLVM.ILabel label:instructions cs})
@@ -127,24 +91,31 @@ addInstruction DefineMain = throwError $ BackBug ("shouldnt use addInstruction f
 addInstruction (ILabel l) = throwError $ BackBug ("shouldnt use addInstruction for new label " ++ show l)
 addInstruction ins = do
     cs <- get
-    let label = currLabel cs
-    let funs = funsCode cs
+    let currFunIdent = currFun cs
+    let currFuns = funs cs
+    currFunCFG <- justLookup currFunIdent currFuns ("[AddIns] currFunIdent in funs" ++ show currFunIdent ++ show currFuns)
+    let label = currLabel currFunCFG
+    let currBlocks = blocks currFunCFG
+    currBlock <- justLookup label currBlocks ("[AddIns] currLabel in blocks" ++ show label ++ show currBlocks)
+    let newBlock = addInsToBlock ins currBlock
+    let newFunCFG = addBlockToCFG label newBlock currFunCFG
+    modify (\s -> s{funs = M.insert currFunIdent newFunCFG currFuns})
+
+
+   {-  let label = currLabel cs
+    let funs = funs cs
     let funIdent = currFun cs
-    funCode <- getJust (M.lookup funIdent funs) ("[AddIns] funIdent in funs" ++ show funIdent ++ show funs)
-    currBlock <- getJust (M.lookup label funCode) ("[AddIns] label in funCode" ++ show label ++ show funCode)
+    funCode <- justLookup (M.lookup funIdent funs) ("[AddIns] funIdent in funs" ++ show funIdent ++ show funs)
+    currBlock <- justLookup (M.lookup label funCode) ("[AddIns] label in funCode" ++ show label ++ show funCode)
     let newCurrFunCode = M.insert label (currBlock ++ [ins]) funCode
     let newFuns = M.insert funIdent newCurrFunCode funs
-    modify (\s -> s{funsCode = newFuns})
+    modify (\s -> s{funsCode = newFuns}) -}
 
    {-  let funIns:rest =  funInstructions cs
     case M.lookup label funIns of
         Just block -> modify (\s -> s {funInstructions = (M.insert label (block++[ins]) funIns):rest})
         Nothing -> throwError $ BackBug ("no instructions for block " ++ show label) -}
     --modify (\s -> s {instructions = ins:instructions cs})
-
-getJust :: Maybe a -> String -> CompilerM a
-getJust Nothing debug = throwError $ BackBug ("lookup fail" ++ debug)
-getJust (Just x) _ = return x
 
 addGlobalInstruction :: Instruction -> CompilerM ()
 addGlobalInstruction ins = do
@@ -160,19 +131,10 @@ getFnType ident = do
             Nothing -> throwError $ FrontBug ("no such ident " ++ ident)
 
 
-type MyError = MyError' BNFC'Position
-data MyError' a = NotImplemented String | FrontBug String | Debug String | BackBug String
-instance Show MyError where
-    show (NotImplemented s) = "NotImplemented " ++ s
-    show (FrontBug s) = "FrontBug " ++ s
-    show (Debug s) = "Debug " ++ s
-    show (BackBug s) = "BackBug " ++ s
-
-
 runCompilerM :: CompilerM a -> IO (Either MyError a, CompilerState)
 runCompilerM e = runStateT (runExceptT (runReaderT e initialEnv)) initialCompilerState
 
-printFuns :: [M.Map Label [Instruction]] -> String
+{- printFuns :: [M.Map Label [Instruction]] -> String
 printFuns [] = []
 printFuns (f:fns) =
     -- M.toList f : [(Label, [Inss])]
@@ -181,21 +143,21 @@ printFuns (f:fns) =
         --con = concat newList
         con = concat list
         sh = map show con in
-        intercalate "\n" sh ++ "\n" ++ printFuns fns
+        intercalate "\n" sh ++ "\n" ++ printFuns fns -}
 
 
 -- type FunsCode = M.Map String (M.Map Label [Instruction])
 compile :: Program -> IO ()
 compile tree = do
     (err, state) <- runCompilerM (compile' tree)
-    let funMap = M.elems (funsCode state)
+    {- let funMap = M.elems (funs state)
     let z = printFuns funMap
     let x = map M.toList funMap
     let b = map M.elems funMap
     let c = concat b
     let d = concat c
     let e = map show d
-    let f = intercalate "\n" e
+    let f = intercalate "\n" e -}
     {- let inss = map (concat . M.elems) (funInstructions state)
     let inss2 = concat inss
     let inss3 = map show inss2
@@ -206,14 +168,14 @@ compile tree = do
             ++ show state ++ "\n\n"
             ++ intercalate "\n" (map show (globInstructions state))
             ++ "\n" ++ prologue
-            ++ z) --f)
+            ++ showCompiledCode state) --f)
             -- ++ intercalate "\n" (map show (concatMap M.elems (funInstructions state))))
           hPrint stderr e
           exitFailure
       Right _ -> putStrLn (
                     intercalate "\n" (map show (globInstructions state))
                     ++ "\n" ++ prologue
-                    ++ z)--f)
+                    ++ showCompiledCode state)--f)
                     -- ++ intercalate "\n" (map show (concatMap M.elems (funInstructions state))))
                         -- where flattenBlock = M.mapWithKey (\label block -> LLVM.ILabel label:block) (instructions state)
 
