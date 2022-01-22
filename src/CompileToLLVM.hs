@@ -60,16 +60,16 @@ defaultRes :: CompilerM  CompStmtRes
 defaultRes = do
     env <- ask
     return (env, False)
-newtype Counter = Counter Integer
+newtype Counter = Counter Int
 instance Show Counter where
     show (Counter i) = "Counter " ++ show i
 newCounter :: Counter
 newCounter = Counter 1
 incCounter :: Counter -> Counter
 incCounter (Counter i) = Counter $ i+1
-castCounter :: Counter -> Integer
+castCounter :: Counter -> Int
 castCounter (Counter i) = i
-getNext :: CompilerM Integer
+getNext :: CompilerM Int
 getNext = do
     cs <- get
     let old = castCounter (registerCounter cs) in do
@@ -89,7 +89,7 @@ newLabel = do
     let old = castCounter (labelCounter cs) in do
         modify (\s -> s {labelCounter = incCounter $ labelCounter cs})
         return $ Label old
-newGlobal :: CompilerM Integer
+newGlobal :: CompilerM Int
 newGlobal = do
     cs <- get
     let old = castCounter (globalsCounter cs) in do
@@ -104,7 +104,7 @@ startNewFun :: String -> Instruction -> CompilerM ()
 startNewFun ident def = do
     cs <- get
     let funs = funsCode cs
-    let newFun = M.fromList [(Label 0, [def])]
+    let newFun = M.fromList [(Label 0, [def]), (Label maxBound, [ClosingBracket])]
     let newFunsCode = M.insert ident newFun funs
     modify (\s -> s {funsCode = newFunsCode, currFun = ident, currLabel = Label 0})
 
@@ -177,10 +177,11 @@ printFuns [] = []
 printFuns (f:fns) =
     -- M.toList f : [(Label, [Inss])]
     let list = map snd $ M.toAscList f --  l : [[Inss]] 
-        newList = init list ++ [last list ++ [ClosingBracket]]
-        con = concat newList
+        -- newList = init list ++ [last list ++ [ClosingBracket]]
+        --con = concat newList
+        con = concat list
         sh = map show con in
-        intercalate "\n" sh ++ printFuns fns
+        intercalate "\n" sh ++ "\n" ++ printFuns fns
 
 
 -- type FunsCode = M.Map String (M.Map Label [Instruction])
@@ -343,7 +344,7 @@ compileStmt (Cond _ expr stmt) = do
             startNewBlock thenLabel
             (_, ret) <- compileStmt stmt
             unless ret $ addInstruction $ LLVM.Br afterLabel
-            unless ret $ startNewBlock afterLabel
+            startNewBlock afterLabel
             defaultRes
         _ -> throwError $ FrontBug "not bool cond in if"
 
@@ -365,7 +366,7 @@ compileStmt (CondElse _ expr s1 s2) = do
             startNewBlock elseLabel
             (_, ret2) <- compileStmt s2
             unless ret2 (addInstruction $ LLVM.Br afterLabel)
-            when (not ret1 || not ret2)$ startNewBlock afterLabel
+            when (not ret1 || not ret2)$ startNewBlock afterLabel -- TODO tutaj ew bug
             env <- ask
             return (env, ret1 && ret2)
         _ -> throwError $ FrontBug "not bool cond in ifelse"
@@ -414,7 +415,7 @@ declareVar t item = do
 
 compileExpr :: Expr -> CompilerM (LLVM.Type, Maybe Value)
 compileExpr (ELitInt p i) =
-        return (I32, Just (VConst (ConstI i)))
+        return (I32, Just (VConst (ConstI (fromIntegral i))))
 compileExpr (EApp p ident exprs) = do
         args_ <- mapM compileExpr exprs
         args <- mapM unJustify args_

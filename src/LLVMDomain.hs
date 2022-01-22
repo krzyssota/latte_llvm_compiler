@@ -3,7 +3,7 @@ module LLVMDomain where
 import Data.List (intercalate)
 import qualified AbsLatte
 
-type Loc = Integer
+type Loc = Int
 
 data Type = I32 | Void | Undef | I8 | I1 | Ptr Type
     deriving (Eq, Ord)
@@ -35,7 +35,7 @@ llvmMulOp mulOp = case mulOp of
                     AbsLatte.Div _ -> Sdiv
                     AbsLatte.Mod _ -> Srem
 
-newtype Register = Register Integer
+newtype Register = Register Int
     deriving (Eq, Ord)
 instance Show Register where
     show (Register i) = "%r_" ++ show i
@@ -67,7 +67,7 @@ llvmRelOp (AbsLatte.GE _) = SGE
 llvmRelOp (AbsLatte.EQU _) = LLVMDomain.EQ
 llvmRelOp (AbsLatte.NE _) = NE
 
-data Const = ConstI Integer | ConstT | ConstF
+data Const = ConstI Int | ConstT | ConstF
     deriving (Eq, Ord)
 instance Show Const where
     show (ConstI i) = show i
@@ -84,7 +84,7 @@ instance Show Value where
     show (GetElemPtr loc len) = "getelementptr inbounds ([" ++ show len ++ "x i8], ["
         ++ show len ++ " x i8]* " ++ "@" ++ stringPrefix ++ show loc ++ ", i32 0, i32 0)"
 
-newtype Label = Label Integer
+newtype Label = Label Int
     deriving (Eq, Ord)
 instance Show Label where
     show (Label i) = "l_" ++ show i
