@@ -78,6 +78,7 @@ data Value = VConst Const
     | VRegister Register
     | GetElemPtr Loc Int
     deriving (Eq, Ord)
+
 instance Show Value where
     show (VConst c) = show c
     show (VRegister r) = show r
@@ -90,7 +91,7 @@ instance Show Label where
     show (Label i) = "l_" ++ show i
 
 data Instruction =
-    Call Type String [(Type, Value)] (Maybe Register)
+    Call (Maybe Register) Type String [(Type, Value)] 
     | Ret Type Value
     | RetVoid
     | Alloc Register Type
@@ -106,13 +107,14 @@ data Instruction =
     | Phi Register Type [(Value, Label)]
     | Define Type String [(Type, Register)]
     | DefineMain
+    | Nop
                deriving Eq
 
 instance Show Instruction where
-    show (Call retType ident args Nothing) =
+    show (Call Nothing retType ident args) =
         "\t" ++ "call " ++ show retType ++ " @" ++ ident
         ++ " (" ++ intercalate ", " (map showFnArg args) ++ ")"
-    show (Call retType ident args (Just r)) =
+    show (Call (Just r) retType ident args ) =
         show r ++ " = call " ++ show retType ++ " @" ++ ident
         ++ " (" ++ intercalate ", " (map showFnArg args) ++ ")"
     show (Ret t v) =
@@ -134,6 +136,7 @@ instance Show Instruction where
     show (Define t ident args) = "define " ++ show t ++ " @" ++ ident ++ "(" ++ intercalate ", " (map showPair args) ++ ") {"
         where showPair (t, r) = show t ++ " " ++ show r
     show DefineMain = "define i32 @main(i32 %argc, i8** %argv) {"
+    show Nop = ""
 
 
 stringPrefix = ".str."

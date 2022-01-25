@@ -5,6 +5,7 @@
 module CompileToLLVM where
 import LLVMDomain as LLVM
 import Structures
+import SSA
 import Control.Monad.IO.Class
 import Control.Monad.State
 import Control.Monad.Reader
@@ -23,43 +24,18 @@ import Data.Set as S (Set, insert, member, empty)
 import Control.Exception (throw)
 import Data.Maybe
 import System.Exit (exitFailure)
-import Data.Functor.Classes (eq1)
-import Distribution.Compat.Lens (_1)
-import Distribution.PackageDescription.Check (checkConfiguredPackage)
 import StaticAnalysis (internalPos)
 
-
-defaultRes :: CompilerM CompStmtRes
-defaultRes = do
-    env <- ask
-    return (env, False)
-
-getNext :: CompilerM Int
-getNext = do
-    cs <- get
-    let old = castCounter (registerCounter cs) in do
-        modify (\s -> s {registerCounter = incCounter $ registerCounter cs})
-        return old
-newRegister :: CompilerM Register
-newRegister = do
-    --Register <$> getNext
-    cs <- get
-    let old = castCounter (registerCounter cs) in do
-        modify (\s -> s {registerCounter = incCounter $ registerCounter cs})
-        return $ Register old
-newLabel :: CompilerM Label
-newLabel = do
-    --Label <$> getNext
-    cs <- get
-    let old = castCounter (labelCounter cs) in do
-        modify (\s -> s {labelCounter = incCounter $ labelCounter cs})
-        return $ Label old
-newGlobal :: CompilerM Int
-newGlobal = do
-    cs <- get
-    let old = castCounter (globalsCounter cs) in do
-        modify (\s -> s {globalsCounter = incCounter $ globalsCounter cs})
-        return old
+initialCompilerState :: CompilerState
+initialCompilerState = CompilerState {
+    registerCounter = newCounter,
+    labelCounter = newCounter,
+    globalsCounter = newCounter,
+    globInstructions = [],
+    funs = M.empty,
+    fnEnv = M.empty,
+    currFun = "placeholder"
+}
 
 -- type FunsCode = M.Map String (M.Map Label [Instruction])
 startNewFun :: String -> Instruction -> CompilerM ()
@@ -67,7 +43,7 @@ startNewFun ident def = do
     cs <- get
     let l0 = Label 0
     let bb = newBlock l0
-    let newFun = FunCFG {ident = ident, def = def, blocks = M.fromList [(l0, bb)], currLabel = l0}
+    let newFun = FunCFG {ident = ident, def = def, blocks = M.fromList [(l0, bb)], currLabel = l0, currDefs = M.empty}
     let newFuns = M.insert ident newFun (funs cs)
     modify (\s -> s {funs = newFuns, currFun = ident})
 
@@ -76,29 +52,42 @@ startNewBlock label = do
     cs <- get
     let currFunIdent = currFun cs
     let currFuns = funs cs
-    funCFG <- justLookup currFunIdent currFuns ("[StNewBl] funIdent in funs" ++ show currFunIdent ++ show currFuns)
-    --let newFunCode = M.insert label [LLVM.ILabel label] funCode
+    funCFG <- getCurrFunCFG
     let block = newBlock label
-    let newFunCFG = addBlockToCFG label block funCFG
+    let newFunCFG = changeCurrLabelInCFG label (addUpdateBlockInCFG label block funCFG)
     modify (\s -> s{funs = M.insert currFunIdent newFunCFG currFuns})
 
     --modify (\s -> s {currLabel = label, funsCode = (M.insert label [LLVM.ILabel label] funIns):rest})
     --modify (\s -> s {currLabel = label, instructions = LLVM.ILabel label:instructions cs})
 
+addJmp :: Instruction -> CompilerM ()
+addJmp (Br l) = do
+    --currFunIdent <- gets currFun
+    --currBlock <- getCurrBlock
+    --addEdge (label currBlock) l currFunIdent
+    addInstruction (Br l)
+addJmp (BrCond v l1 l2) = do
+    --currFunIdent <- gets currFun
+    --currBlock <- getCurrBlock
+    --addEdge (label currBlock) l1 currFunIdent
+    --addEdge (label currBlock) l2 currFunIdent
+    addInstruction (BrCond v l1 l2)
+addJmp i = throwError $ BackBug ("shouldnt use addJmp for this ins: " ++ show i)
+
 addInstruction :: Instruction -> CompilerM ()
 addInstruction (Define a b c) = throwError $ BackBug ("shouldnt use addInstruction for define " ++ show b)
 addInstruction DefineMain = throwError $ BackBug ("shouldnt use addInstruction for defineMain ")
 addInstruction (ILabel l) = throwError $ BackBug ("shouldnt use addInstruction for new label " ++ show l)
+addInstruction (DeclareGString a b c) = throwError $ BackBug ("shouldnt use addInstruction for global string ")
 addInstruction ins = do
     cs <- get
     let currFunIdent = currFun cs
     let currFuns = funs cs
-    currFunCFG <- justLookup currFunIdent currFuns ("[AddIns] currFunIdent in funs" ++ show currFunIdent ++ show currFuns)
+    currFunCFG <- getCurrFunCFG
     let label = currLabel currFunCFG
-    let currBlocks = blocks currFunCFG
-    currBlock <- justLookup label currBlocks ("[AddIns] currLabel in blocks" ++ show label ++ show currBlocks)
+    currBlock <- getCurrBlock
     let newBlock = addInsToBlock ins currBlock
-    let newFunCFG = addBlockToCFG label newBlock currFunCFG
+    let newFunCFG = addUpdateBlockInCFG label newBlock currFunCFG
     modify (\s -> s{funs = M.insert currFunIdent newFunCFG currFuns})
 
 
@@ -132,52 +121,24 @@ getFnType ident = do
 
 
 runCompilerM :: CompilerM a -> IO (Either MyError a, CompilerState)
-runCompilerM e = runStateT (runExceptT (runReaderT e initialEnv)) initialCompilerState
+runCompilerM e = runStateT (runExceptT (runReaderT e M.empty)) initialCompilerState
 
-{- printFuns :: [M.Map Label [Instruction]] -> String
-printFuns [] = []
-printFuns (f:fns) =
-    -- M.toList f : [(Label, [Inss])]
-    let list = map snd $ M.toAscList f --  l : [[Inss]] 
-        -- newList = init list ++ [last list ++ [ClosingBracket]]
-        --con = concat newList
-        con = concat list
-        sh = map show con in
-        intercalate "\n" sh ++ "\n" ++ printFuns fns -}
-
-
--- type FunsCode = M.Map String (M.Map Label [Instruction])
 compile :: Program -> IO ()
 compile tree = do
     (err, state) <- runCompilerM (compile' tree)
-    {- let funMap = M.elems (funs state)
-    let z = printFuns funMap
-    let x = map M.toList funMap
-    let b = map M.elems funMap
-    let c = concat b
-    let d = concat c
-    let e = map show d
-    let f = intercalate "\n" e -}
-    {- let inss = map (concat . M.elems) (funInstructions state)
-    let inss2 = concat inss
-    let inss3 = map show inss2
-    let inss4 = intercalate "\n" inss3 -}
     case err of
       Left e -> do
           putStrLn ( "managed to compile before error\n"
-            ++ show state ++ "\n\n"
+            ++ showDebug state ++ "\n\n"
             ++ intercalate "\n" (map show (globInstructions state))
             ++ "\n" ++ prologue
-            ++ showCompiledCode state) --f)
-            -- ++ intercalate "\n" (map show (concatMap M.elems (funInstructions state))))
+            ++ showCompiledCode state)
           hPrint stderr e
           exitFailure
       Right _ -> putStrLn (
                     intercalate "\n" (map show (globInstructions state))
                     ++ "\n" ++ prologue
-                    ++ showCompiledCode state)--f)
-                    -- ++ intercalate "\n" (map show (concatMap M.elems (funInstructions state))))
-                        -- where flattenBlock = M.mapWithKey (\label block -> LLVM.ILabel label:block) (instructions state)
+                    ++ showCompiledCode state)
 
 
 compile' :: Program -> CompilerM ()
@@ -185,6 +146,7 @@ compile' (Program _ topDefs) = do
     mapM_ registerBuiltInFn builtInFuns
     mapM_ registerFn topDefs
     mapM_ compileTopDef topDefs
+    convertToSSA 
 
 compileTopDef :: TopDef -> CompilerM ()
 compileTopDef (FnDef p1 t (Ident ident) args (Block p2 stmts)) = do
@@ -193,14 +155,12 @@ compileTopDef (FnDef p1 t (Ident ident) args (Block p2 stmts)) = do
         "main" -> do
             startNewFun "main" DefineMain
             compileStmts stmts
-            --addInstruction ClosingBracket
             return ()
         _ -> do
             startNewFun ident (Define (llvmType t) ident (map funDefArg funArgs))
             env <- declareFunArgs funArgs
             local (const env) $ compileStmts stmts
             when (llvmType t == LLVM.Void) (addInstruction RetVoid)
-            --addInstruction ClosingBracket
 
 registerBuiltInFn :: (String, LLVM.Type) -> CompilerM ()
 registerBuiltInFn (ident, t) = do
@@ -302,10 +262,10 @@ compileStmt (Cond _ expr stmt) = do
         (I1, Just val) -> do
             thenLabel <- newLabel
             afterLabel <- newLabel
-            addInstruction $ LLVM.BrCond val thenLabel afterLabel
+            addJmp $ LLVM.BrCond val thenLabel afterLabel
             startNewBlock thenLabel
             (_, ret) <- compileStmt stmt
-            unless ret $ addInstruction $ LLVM.Br afterLabel
+            unless ret (addJmp $ LLVM.Br afterLabel)
             startNewBlock afterLabel
             defaultRes
         _ -> throwError $ FrontBug "not bool cond in if"
@@ -320,31 +280,31 @@ compileStmt (CondElse _ expr s1 s2) = do
         (I1, Just val) -> do
             thenLabel <- newLabel
             elseLabel <- newLabel
-            addInstruction $ LLVM.BrCond val thenLabel elseLabel
+            addJmp $ LLVM.BrCond val thenLabel elseLabel
             startNewBlock thenLabel
             (_, ret1) <- compileStmt s1
             afterLabel <- newLabel
-            unless ret1 (addInstruction $ LLVM.Br afterLabel)
+            unless ret1 (addJmp $ LLVM.Br afterLabel)
             startNewBlock elseLabel
             (_, ret2) <- compileStmt s2
-            unless ret2 (addInstruction $ LLVM.Br afterLabel)
+            unless ret2 (addJmp $ LLVM.Br afterLabel)
             when (not ret1 || not ret2)$ startNewBlock afterLabel -- TODO tutaj ew bug
             env <- ask
             return (env, ret1 && ret2)
         _ -> throwError $ FrontBug "not bool cond in ifelse"
 compileStmt (While _ expr stmt) = do
     checkCondLabel <- newLabel
+    addJmp $ LLVM.Br checkCondLabel
     bodyLabel <- newLabel
-    addInstruction $ LLVM.Br checkCondLabel
     startNewBlock bodyLabel
     (_, ret) <- compileStmt stmt
-    addInstruction $ LLVM.Br checkCondLabel
+    addJmp $ LLVM.Br checkCondLabel
     startNewBlock checkCondLabel
     (t, v) <- compileExpr expr
     case (t, v) of
         (I1, Just val) -> do
             afterLabel <- newLabel
-            addInstruction $ LLVM.BrCond val bodyLabel afterLabel
+            addJmp $ LLVM.BrCond val bodyLabel afterLabel
             startNewBlock afterLabel
             defaultRes
         _ -> throwError $ FrontBug "not bool cond in while"
@@ -362,6 +322,7 @@ declareVar t item = do
     addInstruction (LLVM.Alloc r (llvmType t))
     case item of
         Init p ident expr -> do
+            addToVarsDeclared ident
             (t2, v) <- compileExpr expr
             when (llvmType t /= t2) (throwError $ FrontBug "decl mismatched types")
             case v of
@@ -371,6 +332,7 @@ declareVar t item = do
                 Nothing -> throwError $ FrontBug "void item in decl"
 
         NoInit p ident -> do
+            addToVarsDeclared ident
             when (llvmType t == I32) $ addInstruction (LLVM.Store (VConst (ConstI 0)) (llvmType t) r)
             when (llvmType t == I1) $ addInstruction (LLVM.Store (VConst ConstF) (llvmType t) r)
             asks $ M.insert ident (llvmType t, r)
@@ -473,7 +435,7 @@ compileExpr (Not _ expr) = do
         (_, Nothing) -> throwError $ FrontBug "not of void expr"
 compileExpr (EAnd _ e1 e2) = do
     entryLabel <- newLabel
-    addInstruction $ LLVM.Br entryLabel
+    addJmp $ LLVM.Br entryLabel
     startNewBlock entryLabel
     (t1, v1) <- compileExpr e1
     e1Label <- getCurrLabel
@@ -481,13 +443,13 @@ compileExpr (EAnd _ e1 e2) = do
         (I1, Just val1) -> do
             labelExpr1True <- newLabel
             labelAfter <- newLabel
-            addInstruction $ LLVM.BrCond val1 labelExpr1True labelAfter
+            addJmp $ LLVM.BrCond val1 labelExpr1True labelAfter
             startNewBlock labelExpr1True
             (t2, v2) <- compileExpr e2
             e2Label <- getCurrLabel
             case (t2, v2) of
                 (I1, Just val2) -> do
-                    addInstruction $ LLVM.Br labelAfter
+                    addJmp $ LLVM.Br labelAfter
                     startNewBlock labelAfter
                     r <- newRegister
                     addInstruction $ LLVM.Phi r I1 [(VConst ConstF, e1Label), (val2, e2Label)]
@@ -496,7 +458,7 @@ compileExpr (EAnd _ e1 e2) = do
         _ -> throwError $ FrontBug "void e1 %% e2"
 compileExpr (EOr _ e1 e2) = do
     entryLabel <- newLabel
-    addInstruction $ LLVM.Br entryLabel
+    addJmp $ LLVM.Br entryLabel
     startNewBlock entryLabel
     (t1, v1) <- compileExpr e1
     e1Label <- getCurrLabel
@@ -504,13 +466,13 @@ compileExpr (EOr _ e1 e2) = do
         (I1, Just val1) -> do
             labelExpr1False <- newLabel
             labelAfter <- newLabel
-            addInstruction $ LLVM.BrCond val1 labelAfter labelExpr1False
+            addJmp $ LLVM.BrCond val1 labelAfter labelExpr1False
             startNewBlock labelExpr1False
             (t2, v2) <- compileExpr e2
             e2Label <- getCurrLabel
             case (t2, v2) of
                 (I1, Just val2) -> do
-                    addInstruction $ LLVM.Br labelAfter
+                    addJmp $ LLVM.Br labelAfter
                     startNewBlock labelAfter
                     r <- newRegister
                     addInstruction $ LLVM.Phi r I1 [(VConst ConstT, e1Label), (val2, e2Label)]
@@ -527,11 +489,11 @@ call (Ident ident) args = do
     t <- getFnType ident
     case t of
         LLVM.Void -> do
-            addInstruction (Call t ident args Nothing)
+            addInstruction (Call Nothing t ident args)
             return (t, Nothing)
         _ -> do
             r <- newRegister
-            addInstruction (Call t ident args (Just r))
+            addInstruction (Call (Just r) t ident args )
             return (t, Just $ VRegister r)
 
 

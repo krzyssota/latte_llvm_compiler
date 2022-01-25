@@ -7,9 +7,9 @@ SRC=src
 #BNFC=/home/students/inf/PUBLIC/MRJP/bin/bnfc
 BNFC=bnfc
 
-.PHONY : all clean distclean lib cbl
+.PHONY : RunStaticAnalysis clean distclean lib cbl # TODO add all
 
-all: bnfc lib RunStaticAnalysis
+all: lib RunStaticAnalysis
 
 bnfc: $(SRC)/Latte.cf
 	cd $(SRC) && ${BNFC} -m --functor -haskell Latte.cf && make && cd ..
