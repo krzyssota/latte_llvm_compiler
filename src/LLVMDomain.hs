@@ -75,15 +75,21 @@ instance Show Const where
     show ConstF = "false"
 
 data Value = VConst Const
-    | VRegister Register
+    | VRegister Register Type
     | GetElemPtr Loc Int
     deriving (Eq, Ord)
 
 instance Show Value where
     show (VConst c) = show c
-    show (VRegister r) = show r
+    show (VRegister r _) = show r
     show (GetElemPtr loc len) = "getelementptr inbounds ([" ++ show len ++ "x i8], ["
         ++ show len ++ " x i8]* " ++ "@" ++ stringPrefix ++ show loc ++ ", i32 0, i32 0)"
+showValueType :: Value -> String 
+showValueType (VConst (ConstI _)) = show I32
+showValueType (VConst ConstT) = show I1
+showValueType (VConst ConstF) = show I1
+showValueType (VRegister _ t) = show t
+showValueType (GetElemPtr loc len) = show (Ptr I8)
 
 newtype Label = Label Int
     deriving (Eq, Ord)
@@ -91,8 +97,8 @@ instance Show Label where
     show (Label i) = "l_" ++ show i
 
 data Instruction =
-    Call (Maybe Register) Type String [(Type, Value)] 
-    | Ret Type Value
+    Call (Maybe Register) Type String [Value] 
+    | Ret Value
     | RetVoid
     | Alloc Register Type
     | Store Value Type Register
@@ -117,8 +123,8 @@ instance Show Instruction where
     show (Call (Just r) retType ident args ) =
         show r ++ " = call " ++ show retType ++ " @" ++ ident
         ++ " (" ++ intercalate ", " (map showFnArg args) ++ ")"
-    show (Ret t v) =
-        "\t" ++ "ret " ++ show t ++ " " ++ show v
+    show (Ret v) =
+        "\t" ++ "ret " ++ showValueType v ++ " " ++ show v
     show RetVoid = "\t" ++"ret void"
     show (Alloc r t) = "\t" ++show r ++ " = alloca " ++ show t
     show (Store v t r) = "\t" ++"store " ++ show t ++ " " ++ show v ++ ", " ++ show (Ptr t) ++ " " ++ show r
@@ -141,8 +147,8 @@ instance Show Instruction where
 
 stringPrefix = ".str."
 
-showFnArg :: (Type, Value) -> String
-showFnArg (t, v) = show t ++ " " ++ show v
+showFnArg :: Value -> String
+showFnArg v = showValueType v ++ " " ++ show v
 
 escape :: String -> String
 escape [] = []

@@ -16,8 +16,8 @@ type CompilerM = ReaderT VarsEnv (ExceptT MyError (StateT CompilerState IO))
 type RetInStmt = Bool
 type CompStmtRes = (VarsEnv, RetInStmt)
 
-data SsaIdent = SsaIdent AbsLatte.Ident Int
-    deriving (Show, Eq)
+--data SsaIdent = SsaIdent AbsLatte.Ident Int
+--    deriving (Show, Eq)
 
 
 type FnEnv = M.Map String LLVMDomain.Type -- ret type
@@ -40,13 +40,13 @@ data FunCFG = FunCFG {
     def :: Instruction,
     blocks :: M.Map Label BasicBlock,
     currLabel :: Label,
-    currDefs :: M.Map (Register, Label) Value -- TODO maybe have type+value
+    currDefs :: M.Map (Register, Label) Value
 } deriving Show
 
 data BasicBlock = BasicBlock {
     label :: Label,
     printableLabel :: Bool,
-    phis :: M.Map AbsLatte.Ident [(SsaIdent, Label)],
+    phis :: M.Map Register (Type, [(Value, Label)]),
     inss :: [Instruction],
     varsDeclaredPrev :: S.Set AbsLatte.Ident,
     varsDeclared :: S.Set AbsLatte.Ident,
@@ -61,16 +61,28 @@ data BasicBlock = BasicBlock {
 } deriving (Show, Eq)
 
 newBlock :: Label -> BasicBlock
-newBlock (Label 0) = newBlock' (Label 0) False []
-newBlock l = newBlock' l True [ILabel l]
-newBlock' :: Label -> Bool -> [Instruction] -> BasicBlock
-newBlock' l b inss = BasicBlock {
+newBlock (Label 0) = newBlock' (Label 0) False
+newBlock l = newBlock' l True
+newBlock' :: Label -> Bool -> BasicBlock
+newBlock' l b = BasicBlock {
     label = l, printableLabel = b, phis = M.empty,
-    inss = inss,
+    inss = [],
     varsDeclaredPrev = S.empty, varsDeclared = S.empty, varIdents = M.empty,
     alive = [], preds = S.empty, succs = S.empty, domPreds = S.empty, domSuccs = S.empty,
     imDomPred = Nothing, imDomSuccs = S.empty}
 
+getInsFromPhis :: BasicBlock -> [Instruction]
+getInsFromPhis b = map getInsFromPhi (M.toList $ phis b)
+
+getInsFromPhi :: (Register, (Type, [(Value, Label)])) -> Instruction
+getInsFromPhi (r, (t, entries)) = Phi r t entries 
+
+
+modifyBlockInCurrFun :: BasicBlock -> CompilerM ()
+modifyBlockInCurrFun b = do
+    fun <- getCurrFunCFG
+    let newFun = addUpdateBlockInCFG (label b) b fun
+    modify (\s -> s{funs = M.insert (ident newFun) newFun (funs s)})
 
 getDomPreds :: String -> Label -> CompilerM (S.Set Label)
 getDomPreds funIdent l = do
@@ -152,7 +164,6 @@ changeCurrLabelInCFG l cfg = cfg {currLabel = l}
 addInsToBlock :: Instruction  -> BasicBlock -> BasicBlock
 addInsToBlock i b = b {inss = inss b ++ [i]}
 
-
 getCurrBlock :: CompilerM BasicBlock
 getCurrBlock = do
     cs <- get
@@ -207,7 +218,7 @@ showBlocks :: [BasicBlock] -> String
 showBlocks bs = concatMap showBlock bs
 
 showBlock :: BasicBlock -> String
-showBlock b = showInss (inss b)
+showBlock b = (if printableLabel b then show (ILabel $ label b) else "") ++ showInss (inss b)
 
 showInss :: [Instruction] -> String
 showInss inss = concatMap showIns inss

@@ -184,7 +184,7 @@ declareFunArg :: (LLVM.Type, Ident, Register) -> CompilerM VarsEnv
 declareFunArg (t, ident, r1) = do
     r2 <- newRegister
     addInstruction (LLVM.Alloc r2 t)
-    addInstruction (LLVM.Store (VRegister r1) t r2)
+    addInstruction (LLVM.Store (VRegister r1 t) t r2)
     asks $ M.insert ident (t, r2)
 
 declareFunArgs :: [(LLVM.Type, Ident, Register)] -> CompilerM VarsEnv
@@ -211,7 +211,7 @@ compileStmt (AbsLatte.Ret p expr) = do
     case v of
         Nothing -> throwError $ FrontBug "bad ret"
         Just val -> do
-            addInstruction (LLVM.Ret t val)
+            addInstruction (LLVM.Ret val)
             env <- ask
             return (env, True)
 compileStmt (AbsLatte.VRet p) = do
@@ -240,8 +240,8 @@ compileStmt (Incr _ ident) = do
     r2 <- newRegister
     (t, r) <- getVar ident
     addInstruction $ LLVM.Load r1 t r
-    addInstruction $ LLVM.Ari r2 LLVM.Add (VRegister r1) (VConst (ConstI 1))
-    addInstruction $ LLVM.Store (VRegister r2) t r
+    addInstruction $ LLVM.Ari r2 LLVM.Add (VRegister r1 t) (VConst (ConstI 1))
+    addInstruction $ LLVM.Store (VRegister r2 I32) t r
 
     defaultRes
 compileStmt (Decr _ ident) = do
@@ -249,8 +249,8 @@ compileStmt (Decr _ ident) = do
     r2 <- newRegister
     (t, r) <- getVar ident
     addInstruction $ LLVM.Load r1 t r
-    addInstruction $ LLVM.Ari r2 LLVM.Add (VRegister r1) (VConst (ConstI (-1)))
-    addInstruction $ LLVM.Store (VRegister r2) t r
+    addInstruction $ LLVM.Ari r2 LLVM.Add (VRegister r1 t) (VConst (ConstI (-1)))
+    addInstruction $ LLVM.Store (VRegister r2 I32) t r
     defaultRes
 compileStmt (Cond _ expr stmt) = do
     (t, v) <- compileExpr expr
@@ -343,7 +343,7 @@ compileExpr (ELitInt p i) =
 compileExpr (EApp p ident exprs) = do
         args_ <- mapM compileExpr exprs
         args <- mapM unJustify args_
-        call ident args
+        call ident (map snd args)
 compileExpr (ELitTrue p) =
     return (I1, Just (VConst ConstT))
 compileExpr (ELitFalse p) =
@@ -354,7 +354,7 @@ compileExpr (EVar p ident) = do
     case M.lookup ident env of
         Just (t, r2) -> do
             addInstruction (Load r1 t r2)
-            return (t, Just $ VRegister r1)
+            return (t, Just $ VRegister r1 t) -- TODO opt return only Value
         Nothing -> throwError $ FrontBug "undefined var"
 compileExpr (EString p s) = do
     n <- newGlobal
@@ -369,9 +369,9 @@ compileExpr (EAdd p e1 addOp e2) = do
         (I32, Just val1, I32, Just val2) -> do
                 r <- newRegister
                 addInstruction $ LLVM.Ari r (llvmAddOp addOp) val1 val2
-                return (t1, Just $ VRegister r)
+                return (t1, Just $ VRegister r t1)
         (Ptr I8, Just val1, Ptr I8, Just val2) ->
-                call (Ident "__concatStrings__") [(t1, val1), (t2, val2)]
+                call (Ident "__concatStrings__") [val1, val2]
         _ -> throwError $FrontBug "ari op with wrong type"
 compileExpr (EMul p e1 mulOp e2) = do
     (t1, v1) <- compileExpr e1
@@ -382,7 +382,7 @@ compileExpr (EMul p e1 mulOp e2) = do
         (I32, Just val1, I32, Just val2) -> do
                 r <- newRegister
                 addInstruction $ LLVM.Ari r (llvmMulOp mulOp) val1 val2
-                return (t1, Just $ VRegister r)
+                return (t1, Just $ VRegister r t1)
         _ -> throwError $FrontBug "ari op with wrong type"
 compileExpr (ERel _ e1 relOp e2) = do
     (t1, v1) <- compileExpr e1
@@ -393,25 +393,25 @@ compileExpr (ERel _ e1 relOp e2) = do
         (I32, Just val1, I32, Just val2) -> do
                 r <- newRegister
                 addInstruction $ LLVM.Cmp r (llvmRelOp relOp) I32 val1 val2
-                return (I1, Just $ VRegister r)
+                return (I1, Just $ VRegister r I1)
         (I1, Just val1, I1, Just val2) -> do
             case relOp of
                 EQU _ -> do
                     r <- newRegister
                     addInstruction $ LLVM.Cmp r (llvmRelOp relOp) I1 val1 val2
-                    return (I1, Just $ VRegister r)
+                    return (I1, Just $ VRegister r I1)
                 AbsLatte.NE _ -> do
                     r <- newRegister
                     addInstruction $ LLVM.Cmp r (llvmRelOp relOp) I1 val1 val2
-                    return (I1, Just $ VRegister r)
+                    return (I1, Just $ VRegister r I1)
                 _ -> throwError $ FrontBug "string relOp other than EQU NE"
         (Ptr I8, Just val1, Ptr I8, Just val2) -> do
             case relOp of
                 EQU _ -> do
-                    (_, v) <- call (Ident "__equStrings__") [(t1, val1), (t2, val2)]
+                    (_, v) <- call (Ident "__equStrings__") [val1, val2]
                     return (I1, v)
                 AbsLatte.NE _ -> do
-                    (_, v) <- call (Ident "__neStrings__") [(t1, val1), (t2, val2)]
+                    (_, v) <- call (Ident "__neStrings__") [val1, val2]
                     return (I1, v)
                 _ -> throwError $ FrontBug "string relOp other than EQU NE"
         _ -> throwError $FrontBug "ari op with wrong type"
@@ -421,7 +421,7 @@ compileExpr (Neg _ expr) = do
         (I32, Just val) -> do
             r <- newRegister
             addInstruction $ LLVM.Ari r LLVM.Sub (VConst (ConstI 0)) val
-            return (I32, Just $ VRegister r)
+            return (I32, Just $ VRegister r I32)
         (_, Just val) -> throwError $ FrontBug "neg of not i32 type"
         (_, Nothing) -> throwError $ FrontBug "neg of void expr"
 compileExpr (Not _ expr) = do
@@ -430,7 +430,7 @@ compileExpr (Not _ expr) = do
         (I1, Just val) -> do
             r <- newRegister
             addInstruction $ LLVM.Xor r val (VConst ConstT)
-            return (I1, Just $ VRegister r)
+            return (I1, Just $ VRegister r I1)
         (_, Just val) -> throwError $ FrontBug "not of not i1 type"
         (_, Nothing) -> throwError $ FrontBug "not of void expr"
 compileExpr (EAnd _ e1 e2) = do
@@ -453,7 +453,7 @@ compileExpr (EAnd _ e1 e2) = do
                     startNewBlock labelAfter
                     r <- newRegister
                     addInstruction $ LLVM.Phi r I1 [(VConst ConstF, e1Label), (val2, e2Label)]
-                    return (I1, Just $ VRegister r)
+                    return (I1, Just $ VRegister r I1)
                 _ -> throwError $ FrontBug "true %% void e2"
         _ -> throwError $ FrontBug "void e1 %% e2"
 compileExpr (EOr _ e1 e2) = do
@@ -476,7 +476,7 @@ compileExpr (EOr _ e1 e2) = do
                     startNewBlock labelAfter
                     r <- newRegister
                     addInstruction $ LLVM.Phi r I1 [(VConst ConstT, e1Label), (val2, e2Label)]
-                    return (I1, Just $ VRegister r)
+                    return (I1, Just $ VRegister r I1)
                 _ -> throwError $ FrontBug "true || void e2"
         _ -> throwError $ FrontBug "void e1 || e2"
 
@@ -484,7 +484,7 @@ unJustify :: (LLVM.Type, Maybe Value) -> CompilerM(LLVM.Type, Value)
 unJustify (t, Just v) = return (t, v)
 unJustify (t, Nothing) = throwError $ FrontBug "void exprs called as arguments for function"
 
-call :: Ident -> [(LLVM.Type, Value)] -> CompilerM (LLVM.Type, Maybe Value)
+call :: Ident -> [Value] -> CompilerM (LLVM.Type, Maybe Value)
 call (Ident ident) args = do
     t <- getFnType ident
     case t of
@@ -494,7 +494,7 @@ call (Ident ident) args = do
         _ -> do
             r <- newRegister
             addInstruction (Call (Just r) t ident args )
-            return (t, Just $ VRegister r)
+            return (t, Just $ VRegister r t)
 
 
 indentLns :: [String] -> String
