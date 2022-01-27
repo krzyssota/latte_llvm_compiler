@@ -40,13 +40,12 @@ data FunCFG = FunCFG {
     def :: Instruction,
     blocks :: M.Map Label BasicBlock,
     currLabel :: Label,
-    currDefs :: M.Map (Register, Label) Value
+    currDefs :: M.Map (Label, Register) Value
 } deriving Show
 
 data BasicBlock = BasicBlock {
     label :: Label,
-    printableLabel :: Bool,
-    phis :: M.Map Register (Type, [(Value, Label)]),
+    phis :: [(Phi, Maybe Register)], -- empty phi, Just variable which it describes 
     inss :: [Instruction],
     varsDeclaredPrev :: S.Set AbsLatte.Ident,
     varsDeclared :: S.Set AbsLatte.Ident,
@@ -60,23 +59,24 @@ data BasicBlock = BasicBlock {
     imDomPred :: Maybe Label
 } deriving (Show, Eq)
 
+type Phi = (Register, (Type, [(Value, Label)]))
+
 newBlock :: Label -> BasicBlock
 newBlock (Label 0) = newBlock' (Label 0) False
 newBlock l = newBlock' l True
 newBlock' :: Label -> Bool -> BasicBlock
 newBlock' l b = BasicBlock {
-    label = l, printableLabel = b, phis = M.empty,
+    label = l, phis = [],
     inss = [],
     varsDeclaredPrev = S.empty, varsDeclared = S.empty, varIdents = M.empty,
     alive = [], preds = S.empty, succs = S.empty, domPreds = S.empty, domSuccs = S.empty,
     imDomPred = Nothing, imDomSuccs = S.empty}
 
 getInsFromPhis :: BasicBlock -> [Instruction]
-getInsFromPhis b = map getInsFromPhi (M.toList $ phis b)
+getInsFromPhis b = map (getInsFromPhi . fst) (phis b)
 
-getInsFromPhi :: (Register, (Type, [(Value, Label)])) -> Instruction
-getInsFromPhi (r, (t, entries)) = Phi r t entries 
-
+getInsFromPhi :: Phi -> Instruction
+getInsFromPhi (r, (t, entries)) = IPhi r t entries 
 
 modifyBlockInCurrFun :: BasicBlock -> CompilerM ()
 modifyBlockInCurrFun b = do
@@ -218,7 +218,7 @@ showBlocks :: [BasicBlock] -> String
 showBlocks bs = concatMap showBlock bs
 
 showBlock :: BasicBlock -> String
-showBlock b = (if printableLabel b then show (ILabel $ label b) else "") ++ showInss (inss b)
+showBlock b = show (ILabel $ label b) ++ "\n" ++ showInss (inss b)
 
 showInss :: [Instruction] -> String
 showInss inss = concatMap showIns inss
@@ -303,7 +303,7 @@ showDebugBlocks bs = concatMap showDebugBlock bs
 
 showDebugBlock :: BasicBlock -> String
 showDebugBlock b = show (label b)
-    ++ "\nphis " ++ show (phis b)
+    -- ++ "\nphis " ++ show (phis b)
     ++ "\nsuccs" ++ show (succs b)
     ++ "\npreds" ++ show (preds b)
     {- ++ "\nvarsDeclPrev" ++ show (varsDeclaredPrev b)
@@ -314,3 +314,10 @@ showDebugBlock b = show (label b)
     ++ "\ndomImPred" ++ show (imDomPred b)
     ++ "\ndomImSuccs" ++ show (imDomSuccs b) -}
     ++ "\n\n"
+
+
+showCurrentDefs :: CompilerState -> String
+showCurrentDefs cs = case M.lookup (currFun cs) (funs cs) of
+    Just fun -> show (currDefs fun)
+    Nothing -> ""
+

@@ -452,7 +452,7 @@ compileExpr (EAnd _ e1 e2) = do
                     addJmp $ LLVM.Br labelAfter
                     startNewBlock labelAfter
                     r <- newRegister
-                    addInstruction $ LLVM.Phi r I1 [(VConst ConstF, e1Label), (val2, e2Label)]
+                    addInstruction $ LLVM.IPhi r I1 [(VConst ConstF, e1Label), (val2, e2Label)]
                     return (I1, Just $ VRegister r I1)
                 _ -> throwError $ FrontBug "true %% void e2"
         _ -> throwError $ FrontBug "void e1 %% e2"
@@ -475,7 +475,7 @@ compileExpr (EOr _ e1 e2) = do
                     addJmp $ LLVM.Br labelAfter
                     startNewBlock labelAfter
                     r <- newRegister
-                    addInstruction $ LLVM.Phi r I1 [(VConst ConstT, e1Label), (val2, e2Label)]
+                    addInstruction $ LLVM.IPhi r I1 [(VConst ConstT, e1Label), (val2, e2Label)]
                     return (I1, Just $ VRegister r I1)
                 _ -> throwError $ FrontBug "true || void e2"
         _ -> throwError $ FrontBug "void e1 || e2"

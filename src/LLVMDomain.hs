@@ -110,10 +110,9 @@ data Instruction =
     | BrCond Value Label Label
     | Br Label
     | ILabel Label
-    | Phi Register Type [(Value, Label)]
+    | IPhi Register Type [(Value, Label)]
     | Define Type String [(Type, Register)]
     | DefineMain
-    | Nop
                deriving Eq
 
 instance Show Instruction where
@@ -137,12 +136,11 @@ instance Show Instruction where
     show (BrCond v l1 l2) = "\t" ++"br i1 " ++ show v ++ ", label %" ++ show l1 ++ ", label %" ++ show l2
     show (Br l) = "\t" ++"br label %" ++ show l
     show (ILabel l) = show l ++ ":"
-    show (Phi r t pairs) = "\t" ++show r ++ " = phi " ++ show t ++ intercalate ", " (map showPair pairs)
+    show (IPhi r t pairs) = "\t" ++show r ++ " = phi " ++ show t ++ intercalate ", " (map showPair pairs)
         where showPair (v, l) = "[ " ++ show v ++ ", %" ++ show l ++ " ]"
     show (Define t ident args) = "define " ++ show t ++ " @" ++ ident ++ "(" ++ intercalate ", " (map showPair args) ++ ") {"
         where showPair (t, r) = show t ++ " " ++ show r
     show DefineMain = "define i32 @main(i32 %argc, i8** %argv) {"
-    show Nop = ""
 
 
 stringPrefix = ".str."
