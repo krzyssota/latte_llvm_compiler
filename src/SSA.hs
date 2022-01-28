@@ -26,9 +26,20 @@ convertToSSA = do
     mapM_ transAddPhis (funs cs2)
     calcDomTree
     cs3 <- get
-    liftIO $ putStrLn ( "\n\nbefore gcse\n"
-            ++ showCompiledCode cs3)
-    mapM_ gcse (funs cs3)
+    {- liftIO $ putStrLn ( "\n\nbefore triv phi\n"
+            ++ 
+            showCompiledCode cs3) -}
+    mapM_ removeTrivPhi (funs cs3)
+{-     liftIO $ putStrLn ( "\n\nbefore gcse\n"
+            ++ 
+            showCompiledCode cs3) -}
+    cs4 <- get
+    mapM_ gcse (funs cs4)
+    cs5 <- get
+    {- liftIO $ putStrLn ( "\n\nbefore triv phi\n"
+            ++ 
+            showCompiledCode cs3) -}
+    mapM_ removeTrivPhi (funs cs5)
     
 
 -- removeTrivialPhis
@@ -328,9 +339,104 @@ bfsOrder fun = do
                     -- difference: Return elements of the first set not existing in the second set.
                     bfs fun (queue ++ S.toList (succs block)) (S.insert l seen) (lOut ++ [l])
 
+removeTrivPhi :: FunCFG -> CompilerM ()
+removeTrivPhi fun = do
+    modify (\s -> s{currFun = ident fun})--, funs = M.insert (ident fun) fun{currDefs = M.empty} (funs s)})
+    blocks <- bfsOrder fun     -- bfs of CFG order
+    removeTrivPhi' (ident fun) blocks
+    where
+    removeTrivPhi' :: String -> [Label] -> CompilerM ()
+    removeTrivPhi' funIdent labels = do
+        trivPhi <- findTrivPhisInBlocks labels
+        case trivPhi of
+            Nothing -> return ()
+            Just phi -> do
+                swapPhiValuesInBlocks labels phi
+                removeTrivPhi' funIdent labels
+    findTrivPhisInBlocks :: [Label] -> CompilerM (Maybe (Register, Value))
+    findTrivPhisInBlocks [] = return Nothing
+    findTrivPhisInBlocks (l:ls) = do
+        (phi, newBlock) <- findRemTrivPhiInBlock l
+        modifyBlockInCurrFun newBlock
+        case phi of
+            Nothing -> findTrivPhisInBlocks ls
+            Just trivPhi -> return phi
+
+    findRemTrivPhiInBlock :: Label -> CompilerM (Maybe (Register, Value), BasicBlock)
+    findRemTrivPhiInBlock l = do
+        block <- getBlockFromCurrFun l
+        (mphi, newInss) <- findRemTrivPhiInInss (inss block) []
+        let newBlock = block{inss = newInss}
+        return (mphi, newBlock)
+
+    findRemTrivPhiInInss :: [Instruction] -> [Instruction] -> CompilerM (Maybe (Register, Value), [Instruction])
+    findRemTrivPhiInInss [] inssOut = return (Nothing, inssOut)
+    findRemTrivPhiInInss (ins:inssIn) inssOut = do
+        case ins of
+            IPhi r t entries -> do
+                case trivialEntries entries of                        
+                    Just v -> do
+                        return (Just (r, v), inssOut ++ inssIn)
+                    Nothing -> findRemTrivPhiInInss inssIn (inssOut ++ [ins])
+            _ -> findRemTrivPhiInInss inssIn (inssOut ++ [ins])
+    swapPhiValuesInBlocks :: [Label] -> (Register, Value) -> CompilerM ()
+    swapPhiValuesInBlocks [] _ = return ()
+    swapPhiValuesInBlocks (l:ls) phi = do
+        newBlock <- swapPhiValuesInBlock l phi
+        modifyBlockInCurrFun newBlock
+        swapPhiValuesInBlocks ls phi
+    swapPhiValuesInBlock :: Label -> (Register, Value) -> CompilerM BasicBlock
+    swapPhiValuesInBlock l phi = do
+        block <- getBlockFromCurrFun l
+        newInss <- swapPhiValuesInInss (inss block) [] phi
+        return block{inss = newInss}
+    swapPhiValuesInInss :: [Instruction] -> [Instruction] -> (Register, Value) -> CompilerM [Instruction]
+    swapPhiValuesInInss [] inssOut _ = return inssOut
+    swapPhiValuesInInss (ins:inssIn) inssOut phi = do
+        newIns <- swapPhiValuesInIns ins phi
+        swapPhiValuesInInss inssIn (inssOut ++ [newIns]) phi
+
+    swapPhiValuesInIns :: Instruction -> (Register, Value) -> CompilerM Instruction
+    swapPhiValuesInIns ins phi = do
+        case ins of
+            Call r t ident args -> do
+                let args' = map (swapForPhi phi) args
+                return (Call r t ident args')
+            Ret v -> return $ Ret (swapForPhi phi v)
+            Ari r op v1 v2 -> do
+                let v1' = swapForPhi phi v1
+                let v2' = swapForPhi phi v2
+                return $ Ari r op v1' v2'
+            Xor r v1 v2 -> do
+                let v1' = swapForPhi phi v1
+                let v2' = swapForPhi phi v2
+                return $ Xor r v1' v2'
+            Cmp r op t v1 v2 -> do
+                let v1' = swapForPhi phi v1
+                let v2' = swapForPhi phi v2
+                return $ Cmp r op t v1' v2'
+            IPhi r t entries -> do
+                let entries' = swapEntriesForPhi phi entries
+                return $ IPhi r t entries'
+            BrCond v l1 l2 -> return $ BrCond (swapForPhi phi v) l1 l2
+            _ -> return ins
+
+    swapEntriesForPhi :: (Register, Value) -> [(Value, Label)] -> [(Value, Label)]
+    swapEntriesForPhi phi entries = map (\(v, l) -> (swapForPhi phi v, l)) entries
+    swapForPhi :: (Register, Value) -> Value -> Value
+    swapForPhi (r2, v2) v1 = case v1 of
+        (VRegister r1 t) -> if r1 == r2 then v2 else v1
+        _ -> v1
+
+        
+
+
+
+
+        
 gcse :: FunCFG -> CompilerM ()
 gcse fun = do
-    modify (\s -> s{currFun = ident fun})--, funs = M.insert (ident fun) fun{currDefs = M.empty} (funs s)})
+    modify (\s -> s{currFun = ident fun, funs = M.insert (ident fun) fun{currDefs = M.empty} (funs s)})
     blocks' <- bfsOrder fun     -- bfs of CFG order
     gcse' fun blocks' 0
     where
@@ -339,7 +445,7 @@ gcse fun = do
             mapM_ gcseInBlock blocks
             newFun <- getCurrFunCFG
             mapM_ clearSubexpressionsInBlock blocks
-            when (newFun /= fun && runs < 0) (gcse' newFun blocks (runs+1)) -- fixpoint
+            when (newFun /= fun && runs < 10) (gcse' newFun blocks (runs+1)) -- fixpoint
             where
                 clearSubexpressionsInBlock :: Label -> CompilerM ()
                 clearSubexpressionsInBlock l = do
@@ -382,13 +488,13 @@ optimizeIns l subexprsFromDoms ins = do
     block <- getBlockFromCurrFun l
     let gins = generifyIns ins
     let allSubexprs = M.union subexprsFromDoms (subexpressions block)
-    let res = M.lookup gins  allSubexprs-- find in subexpression calculated in Doms and in current Block (so far)
+    let res = M.lookup gins allSubexprs-- find in subexpression calculated in Doms and in current Block (so far)
     --when (isJust res ) (liftIO $ putStrLn ("optimizing " ++ show ins ++ " " ++ show res)) 
     (newIns, newBlock) <- case ins of
         -- no Alloc, Store, Load, DeclareGString, Define, DefineMain, ILabel
         Ari r op v1 v2 -> do
-            v1' <- readValue l v1
-            v2' <- readValue l v2
+            v1' <- readValueGCSE l v1
+            v2' <- readValueGCSE l v2
             case res of
                 Nothing -> do
                     writeVariable l r (VRegister r I32)
@@ -397,8 +503,8 @@ optimizeIns l subexprsFromDoms ins = do
                     writeVariable l r (VRegister calculatedExpr I32)
                     return (Nothing, block)
         Xor r v1 v2 -> do
-            v1' <- readValue l v1
-            v2' <- readValue l v2
+            v1' <- readValueGCSE l v1
+            v2' <- readValueGCSE l v2
             case res of
                 Nothing -> do
                     writeVariable l r (VRegister r I1)
@@ -407,46 +513,37 @@ optimizeIns l subexprsFromDoms ins = do
                     writeVariable l r (VRegister calculatedExpr I1)
                     return (Nothing, block)
         Cmp r op t v1 v2 -> do
-            v1' <- readValue l v1
-            v2' <- readValue l v2
+            v1' <- readValueGCSE l v1
+            v2' <- readValueGCSE l v2
             case res of
                 Nothing -> do
-                    writeVariable l r (VRegister r t)
+                    writeVariable l r (VRegister r I1)
                     return (Just $ Cmp r op t v1' v2', block{subexpressions = M.insert gins r (subexpressions block)})
                 Just calculatedExpr -> do
-                    writeVariable l r (VRegister calculatedExpr t)
+                    writeVariable l r (VRegister calculatedExpr I1)
                     return (Nothing, block)
         Ret v -> do
-            v' <- readValue l v
+            v' <- readValueGCSE l v
             case res of
                 Nothing -> return (Just $ Ret v', block)
                 Just calculatedExpr -> return (Just $ Ret (VRegister calculatedExpr (getValueType v)), block)
         BrCond v l1 l2 -> do
-            v' <- readValue l v
+            v' <- readValueGCSE l v
             case res of
                 Nothing -> return (Just $ BrCond v' l1 l2, block)
                 Just calculatedExpr -> return (Just $ BrCond (VRegister calculatedExpr (getValueType v)) l1 l2, block)
         Call r t ident values -> do
-            --when (isJust r) (writeVariable l (fromJust r) (VRegister (fromJust r) t))
-            values' <- mapM (readValue l) values
+            when (isJust r) (writeVariable l (fromJust r) (VRegister (fromJust r) t))
+            values' <- mapM (readValueGCSE l) values
             --cfg <- getCurrFunCFG
-            --liftIO $ putStrLn (show l ++ "in call " ++ show ins ++ " v' " ++ show values' ++ "\n")-- ++ show (currDefs cfg))
+            --writeVariable l r (VRegister r t)
+
+            --liftIO $ putStrLn (show l ++ "in call " ++ show ins ++ " v' " ++ show values' ++ "\n" ++ show (currDefs cfg))
             return (Just $ Call r t ident values', block)
-            --return (Just $ Call r t ident values, block)
         IPhi r t entries -> do
-            entries' <- mapM (readEntryVal l) entries
+            entries' <- mapM (readEntryValGCSE l) entries
+            writeVariable l r (VRegister r t)
             return (Just $ IPhi r t entries', block)
-            {- case trivialEntries entries of
-                Just (VRegister r' t') -> do
-                    writeVariable l r (VRegister r' t')
-                    return (Nothing, block)
-                Just v -> do
-                    writeVariable l r v
-                    return (Nothing, block)
-                Nothing -> do
-                    writeVariable l r (VRegister r t)
-                    entries' <- mapM (readEntryVal l) entries
-                    return (Just $ IPhi r t entries', block) -}
         _ -> return (Just ins, block) -- RetVoid, Br, Phi
 
     modifyBlockInCurrFun newBlock
@@ -463,9 +560,28 @@ optimizeIns l subexprsFromDoms ins = do
                     Xor r v1 v2 -> Xor zeroR v1 v2
                     Cmp r op t v1 v2 -> Cmp zeroR op t v1 v2
                     _ -> ins
-        trivialEntries :: [(Value, Label)] -> Maybe Value
-        trivialEntries entries =
-            let vs = map fst entries in
-                if length (nub vs) == 1
-                    then Just $ head (nub vs)
-                    else Nothing
+
+trivialEntries :: [(Value, Label)] -> Maybe Value
+trivialEntries entries =
+    let vs = map fst entries in
+    if length (nub vs) == 1
+        then Just $ head (nub vs)
+        else Nothing
+
+readValueGCSE :: Label -> Value -> CompilerM Value
+readValueGCSE l (VRegister variable t) = readVariableGCSE l variable t
+readValueGCSE l v = return v
+
+readVariableGCSE :: Label -> Register -> Type -> CompilerM Value
+readVariableGCSE l variable t = do
+    cs <- get
+    let funIdent = currFun cs
+    fun <- justLookup funIdent (funs cs) "readVariable"
+    case M.lookup (l, variable) (currDefs fun) of
+        Just val -> return val
+        Nothing -> return $ VRegister variable t
+
+readEntryValGCSE :: Label -> (Value, Label) -> CompilerM (Value, Label)
+readEntryValGCSE label (v, l) = do
+    v' <- readValueGCSE l v -- sic! l not label 
+    return (v', l)
