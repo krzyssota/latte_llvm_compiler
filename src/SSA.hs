@@ -445,7 +445,7 @@ gcse fun = do
             mapM_ gcseInBlock blocks
             newFun <- getCurrFunCFG
             mapM_ clearSubexpressionsInBlock blocks
-            when (newFun /= fun && runs < 10) (gcse' newFun blocks (runs+1)) -- fixpoint
+            when (newFun /= fun ) (gcse' newFun blocks (runs+1)) -- fixpoint
             where
                 clearSubexpressionsInBlock :: Label -> CompilerM ()
                 clearSubexpressionsInBlock l = do
