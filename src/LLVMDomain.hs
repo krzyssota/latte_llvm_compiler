@@ -41,7 +41,7 @@ instance Show Register where
     show (Register i) = "%r_" ++ show i
 
 data AriOp = Add | Sub | Mul | Sdiv | Srem
-    deriving (Eq)
+    deriving (Eq, Ord)
 instance Show AriOp where
     show Add = "add nsw i32"
     show Sub = "sub nsw i32"
@@ -78,18 +78,20 @@ data Value = VConst Const
     | VRegister Register Type
     | GetElemPtr Loc Int
     deriving (Eq, Ord)
-
+getValueType :: Value -> Type 
+getValueType (VConst (ConstI _)) =  I32
+getValueType (VConst ConstT) =  I1
+getValueType (VConst ConstF) =  I1
+getValueType (VRegister _ t) =  t
+getValueType (GetElemPtr loc len) =  Ptr I8
 instance Show Value where
     show (VConst c) = show c
     show (VRegister r _) = show r
     show (GetElemPtr loc len) = "getelementptr inbounds ([" ++ show len ++ "x i8], ["
         ++ show len ++ " x i8]* " ++ "@" ++ stringPrefix ++ show loc ++ ", i32 0, i32 0)"
+       
 showValueType :: Value -> String 
-showValueType (VConst (ConstI _)) = show I32
-showValueType (VConst ConstT) = show I1
-showValueType (VConst ConstF) = show I1
-showValueType (VRegister _ t) = show t
-showValueType (GetElemPtr loc len) = show (Ptr I8)
+showValueType = show . getValueType
 
 newtype Label = Label Int
     deriving (Eq, Ord)
@@ -113,7 +115,7 @@ data Instruction =
     | IPhi Register Type [(Value, Label)]
     | Define Type String [(Type, Register)]
     | DefineMain
-               deriving Eq
+               deriving (Eq, Ord)
 
 instance Show Instruction where
     show (Call Nothing retType ident args) =

@@ -41,12 +41,13 @@ data FunCFG = FunCFG {
     blocks :: M.Map Label BasicBlock,
     currLabel :: Label,
     currDefs :: M.Map (Label, Register) Value
-} deriving Show
+} deriving (Show, Eq)
 
 data BasicBlock = BasicBlock {
     label :: Label,
     phis :: [(Phi, Maybe Register)], -- empty phi, Just variable which it describes 
     inss :: [Instruction],
+    subexpressions :: M.Map Instruction Register,
     varsDeclaredPrev :: S.Set AbsLatte.Ident,
     varsDeclared :: S.Set AbsLatte.Ident,
     varIdents :: M.Map AbsLatte.Ident Int,
@@ -67,7 +68,7 @@ newBlock l = newBlock' l True
 newBlock' :: Label -> Bool -> BasicBlock
 newBlock' l b = BasicBlock {
     label = l, phis = [],
-    inss = [],
+    inss = [], subexpressions = M.empty,
     varsDeclaredPrev = S.empty, varsDeclared = S.empty, varIdents = M.empty,
     alive = [], preds = S.empty, succs = S.empty, domPreds = S.empty, domSuccs = S.empty,
     imDomPred = Nothing, imDomSuccs = S.empty}
@@ -306,10 +307,11 @@ showDebugBlock b = show (label b)
     -- ++ "\nphis " ++ show (phis b)
     ++ "\nsuccs" ++ show (succs b)
     ++ "\npreds" ++ show (preds b)
+    ++ "\ndomPreds" ++ show (domPreds b)
     {- ++ "\nvarsDeclPrev" ++ show (varsDeclaredPrev b)
     ++ "\nvarsDecl" ++ show (varsDeclared b)
   
-    ++ "\ndomPreds" ++ show (domPreds b)
+    
     ++ "\ndomSuccs" ++ show (domSuccs b)
     ++ "\ndomImPred" ++ show (imDomPred b)
     ++ "\ndomImSuccs" ++ show (imDomSuccs b) -}
